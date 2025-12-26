@@ -42,6 +42,62 @@ def audit_lfp_dataset(auditory_cortex_df):
     report['all_frequencies'] = sorted(auditory_cortex_df['frequency'].dropna().unique())
     report['all_amplitudes'] = sorted(auditory_cortex_df['amplitude'].dropna().unique())
 
+    # Trace count quality checks
+    def trace_count(value):
+        if isinstance(value, (list, tuple, np.ndarray, pd.Series)):
+            return len(value), False, False
+        if isinstance(value, str):
+            truncated = "..." in value
+            cleaned = value.strip()
+            if cleaned.startswith("[") and cleaned.endswith("]"):
+                cleaned = cleaned[1:-1]
+            cleaned = cleaned.replace(",", " ").strip()
+            if not cleaned:
+                return 0, truncated, False
+            values = np.fromstring(cleaned, sep=" ")
+            if values.size == 0:
+                return np.nan, truncated, True
+            return int(values.size), truncated, False
+        return np.nan, False, True
+
+    counts = []
+    truncated_count = 0
+    parse_errors = 0
+    parsed_count = 0
+    valid_counts = []
+
+    for value in auditory_cortex_df.get('trace', []):
+        count, truncated, parse_error = trace_count(value)
+        counts.append(count)
+        if truncated:
+            truncated_count += 1
+        if parse_error:
+            parse_errors += 1
+        else:
+            parsed_count += 1
+            if not truncated and not (isinstance(count, float) and np.isnan(count)):
+                valid_counts.append(count)
+
+    expected = None
+    if valid_counts:
+        count_series = pd.Series(valid_counts)
+        expected = int(count_series.mode().iloc[0])
+
+    trace_stats = {
+        'total_traces': len(auditory_cortex_df),
+        'parsed_traces': parsed_count,
+        'expected': expected,
+        'min': int(np.min(valid_counts)) if valid_counts else None,
+        'max': int(np.max(valid_counts)) if valid_counts else None,
+        'mean': float(np.mean(valid_counts)) if valid_counts else None,
+        'std': float(np.std(valid_counts)) if valid_counts else None,
+        'unique_counts': sorted(set(valid_counts)) if valid_counts else [],
+        'n_mismatched': int(sum(1 for c in valid_counts if c != expected)) if expected is not None else None,
+        'n_truncated': truncated_count,
+        'n_parse_errors': parse_errors
+    }
+    report['trace_count_quality'] = trace_stats
+
     return report
 
 
@@ -77,6 +133,13 @@ def print_audit_report(report, dataset_stats_df=None):
             return "n/a"
         return f"{(sample_value / full_value) * 100:.1f}%"
 
+    def format_list(values, max_items=10):
+        if not values:
+            return "[]"
+        if len(values) <= max_items:
+            return str(values)
+        return f"{values[:max_items]} +{len(values) - max_items} more"
+
     print("=" * 60)
     print("LFP SAMPLE DATASET AUDIT REPORT")
     print("=" * 60)
@@ -93,6 +156,21 @@ def print_audit_report(report, dataset_stats_df=None):
     print(f"   # frequencies: {format_count(report.get('n_frequencies'))}")
     print(f"   # amplitudes: {format_count(report.get('n_amplitudes'))}")
     print(f"   # freq-amp combos: {format_count(report.get('n_freq_amp_combos'))}")
+
+    trace_quality = report.get('trace_count_quality')
+    if trace_quality:
+        print("\nTRACE COUNT QUALITY")
+        print(f"   Expected length: {format_count(trace_quality.get('expected'))}")
+        print(f"   Parsed traces: {format_count(trace_quality.get('parsed_traces'))} of "
+              f"{format_count(trace_quality.get('total_traces'))}")
+        print(f"   Min length: {format_count(trace_quality.get('min'))}")
+        print(f"   Max length: {format_count(trace_quality.get('max'))}")
+        print(f"   Mean length: {format_float(trace_quality.get('mean'))}")
+        print(f"   Std length: {format_float(trace_quality.get('std'))}")
+        print(f"   Mismatched lengths: {format_count(trace_quality.get('n_mismatched'))}")
+        print(f"   Truncated traces: {format_count(trace_quality.get('n_truncated'))}")
+        print(f"   Parse errors: {format_count(trace_quality.get('n_parse_errors'))}")
+        print(f"   Unique lengths: {format_list(trace_quality.get('unique_counts', []))}")
     print("=" * 60)
 
     if stats is None:
