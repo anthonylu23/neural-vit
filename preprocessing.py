@@ -42,8 +42,7 @@ def compute_spectrogram_single(
     nperseg=128,
     noverlap=120,
     freq_max=None,
-    log_scale=True,
-    normalize=False
+    log_scale=True
 ):
     """
     Compute spectrogram from a single LFP trace.
@@ -55,7 +54,6 @@ def compute_spectrogram_single(
         noverlap: Overlapping samples between segments
         freq_max: Maximum frequency to include (Hz), None for no filtering
         log_scale: Apply log10 transform
-        normalize: Z-score normalize the spectrogram
         
     Returns:
         spec: 2D array (freq_bins, time_bins)
@@ -82,10 +80,6 @@ def compute_spectrogram_single(
     if log_scale:
         Sxx = np.log10(Sxx + 1e-10)
     
-    # Z-score normalization (per spectrogram)
-    if normalize:
-        Sxx = (Sxx - Sxx.mean()) / (Sxx.std() + 1e-8)
-    
     return Sxx, freqs, times
 
 
@@ -95,8 +89,7 @@ def compute_spectrogram_column(
     nperseg=128,
     noverlap=120,
     freq_max=None,
-    log_scale=True,
-    normalize=True
+    log_scale=True
 ):
     """
     Apply spectrogram computation to a pandas Series of traces.
@@ -108,7 +101,6 @@ def compute_spectrogram_column(
         noverlap: Overlapping samples between segments
         freq_max: Maximum frequency to include (Hz), None for no filtering
         log_scale: Apply log10 transform
-        normalize: Z-score normalize each spectrogram
         
     Returns:
         pandas Series of 2D spectrograms
@@ -120,8 +112,7 @@ def compute_spectrogram_column(
             nperseg=nperseg, 
             noverlap=noverlap,
             freq_max=freq_max, 
-            log_scale=log_scale, 
-            normalize=normalize
+            log_scale=log_scale
         )
         return spec
     
@@ -137,8 +128,7 @@ def build_dataset(
     nperseg=128,
     noverlap=120,
     freq_max=None, 
-    log_scale=True, 
-    normalize=True
+    log_scale=True
 ):
     """
     Build preprocessed dataset from raw data.
@@ -152,7 +142,6 @@ def build_dataset(
         nperseg, noverlap: Spectrogram parameters
         freq_max: Max frequency to keep (Hz)
         log_scale: Apply log transform to spectrograms
-        normalize: Z-score normalize spectrograms
     
     Returns:
         DataFrame with 'spectrograms' column added
@@ -171,10 +160,48 @@ def build_dataset(
     
     # Compute spectrograms
     dataset['spectrograms'] = compute_spectrogram_column(
-        dataset['trace'], fs, nperseg, noverlap, freq_max, log_scale, normalize
+        dataset['trace'], fs, nperseg, noverlap, freq_max, log_scale
     )
     
     return dataset
+
+
+def normalize(df, global_normalization=True):
+    """
+    Normalize spectrograms in dataset using Z-score normalization.
+    
+    Args:
+        df: DataFrame with 'spectrograms' column containing 2D arrays (freq, time)
+        global_normalization: If True, compute mean/std across all spectrograms in the dataset.
+                              If False, normalize each spectrogram independently.
+    
+    Returns:
+        df: DataFrame with normalized spectrograms
+        stats: Dict with 'mean' and 'std' (only meaningful for global normalization)
+    """
+    df = df.copy()
+    
+    if global_normalization:
+        # Compute global statistics across all spectrograms
+        all_specs = np.stack(df['spectrograms'].values)
+        mean = all_specs.mean()
+        std = all_specs.std()
+        
+        # Apply global normalization to each spectrogram
+        df['spectrograms'] = df['spectrograms'].apply(
+            lambda spec: (spec - mean) / (std + 1e-8)
+        )
+        
+        stats = {'mean': mean, 'std': std}
+    else:
+        # Normalize each spectrogram independently
+        df['spectrograms'] = df['spectrograms'].apply(
+            lambda spec: (spec - spec.mean()) / (spec.std() + 1e-8)
+        )
+        
+        stats = {'mean': None, 'std': None}
+    
+    return df, stats
 
 def build_trial_sequences(
     df,
