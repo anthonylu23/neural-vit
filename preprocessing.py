@@ -3,11 +3,11 @@ import numpy as np
 from scipy.signal import spectrogram, windows
 from typing import List, Dict
 
-
+def parse_trace(trace_array):
+    parsed_trace = np.fromstring(trace_array.strip('[]'), sep=',')
+    return parsed_trace
+    
 def process_trace_column(trace_column):
-    def parse_trace(trace_array):
-        parsed_trace = np.fromstring(trace_array.strip('[]'), sep=',')
-        return parsed_trace
     processed_trace = trace_column.apply(parse_trace)
     return processed_trace
 
@@ -165,43 +165,6 @@ def build_dataset(
     
     return dataset
 
-
-def normalize(df, global_normalization=True):
-    """
-    Normalize spectrograms in dataset using Z-score normalization.
-    
-    Args:
-        df: DataFrame with 'spectrograms' column containing 2D arrays (freq, time)
-        global_normalization: If True, compute mean/std across all spectrograms in the dataset.
-                              If False, normalize each spectrogram independently.
-    
-    Returns:
-        df: DataFrame with normalized spectrograms
-        stats: Dict with 'mean' and 'std' (only meaningful for global normalization)
-    """
-    df = df.copy()
-    
-    if global_normalization:
-        # Compute global statistics across all spectrograms
-        all_specs = np.stack(df['spectrograms'].values)
-        mean = all_specs.mean()
-        std = all_specs.std()
-        
-        # Apply global normalization to each spectrogram
-        df['spectrograms'] = df['spectrograms'].apply(
-            lambda spec: (spec - mean) / (std + 1e-8)
-        )
-        
-        stats = {'mean': mean, 'std': std}
-    else:
-        # Normalize each spectrogram independently
-        df['spectrograms'] = df['spectrograms'].apply(
-            lambda spec: (spec - spec.mean()) / (spec.std() + 1e-8)
-        )
-        
-        stats = {'mean': None, 'std': None}
-    
-    return df, stats
 
 def build_trial_sequences(
     df,
