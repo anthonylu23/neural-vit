@@ -1,11 +1,21 @@
 import pandas as pd
 import numpy as np
 from scipy.signal import spectrogram, windows
-from typing import List, Dict
 
 def parse_trace(trace_array):
-    parsed_trace = np.fromstring(trace_array.strip('[]'), sep=',')
-    return parsed_trace
+    if isinstance(trace_array, np.ndarray):
+        return trace_array
+    if isinstance(trace_array, list):
+        return np.array(trace_array)
+    if isinstance(trace_array, str):
+        cleaned = trace_array.strip()
+        if cleaned.startswith('[') and cleaned.endswith(']'):
+            cleaned = cleaned[1:-1]
+        cleaned = cleaned.replace(',', ' ').strip()
+        if not cleaned:
+            return np.array([])
+        return np.fromstring(cleaned, sep=' ')
+    return np.array(trace_array)
     
 def process_trace_column(trace_column):
     processed_trace = trace_column.apply(parse_trace)
@@ -139,12 +149,12 @@ def build_dataset(
         apply_time_window: Whether to crop traces to time window
         start_time, end_time: Time window bounds (seconds)
         baseline_end: End of baseline period for correction (seconds)
-        nperseg, noverlap: Spectrogram parameters
-        freq_max: Max frequency to keep (Hz)
-        log_scale: Apply log transform to spectrograms
+        nperseg, noverlap: Unused (spectrograms computed during dataset access)
+        freq_max: Unused (spectrograms computed during dataset access)
+        log_scale: Unused (spectrograms computed during dataset access)
     
     Returns:
-        DataFrame with 'spectrograms' column added
+        DataFrame with parsed and baseline-corrected traces
     """
     dataset = raw_data.copy()
     
@@ -157,11 +167,6 @@ def build_dataset(
     # Optional time windowing
     if apply_time_window:
         dataset['trace'] = time_windowing(dataset['trace'], fs, start_time, end_time)
-    
-    # Compute spectrograms
-    dataset['spectrograms'] = compute_spectrogram_column(
-        dataset['trace'], fs, nperseg, noverlap, freq_max, log_scale
-    )
     
     return dataset
 
@@ -176,13 +181,13 @@ def build_trial_sequences(
     Build sequences of consecutive trials per session.
     
     Args:
-        df: DataFrame with 'session', 'condition', 'trial_num', 'spectrograms'
+        df: DataFrame with 'session', 'condition', 'trial_num', 'trace'
         n_trials: Number of trials per sequence
         stride: Step size between sequences (overlap = n_trials - stride)
         min_trials: Minimum trials required in session
     
     Returns:
-        List of dicts: {'spectrograms': 3D array, 'label': int, 'session': id}
+        List of dicts: {'traces': 2D array, 'label': int, 'session': id}
     """
     sequences = []
     
@@ -194,18 +199,20 @@ def build_trial_sequences(
             continue
         
         # Get condition label (0=WT, 1=FMR1)
+        if session_df['condition'].nunique() != 1:
+            raise ValueError(f"Session {session_id} has mixed conditions.")
         condition = session_df['condition'].iloc[0]
         label = 1 if condition == 'FMR1' else 0
         
-        # Stack spectrograms
-        specs = np.stack(session_df['spectrograms'].values)  # (n_trials_in_session, freq, time)
+        # Stack traces
+        traces = np.stack(session_df['trace'].values)  # (n_trials_in_session, n_samples)
         
         # Create sliding window sequences
-        for start_idx in range(0, len(specs) - n_trials + 1, stride):
-            seq_specs = specs[start_idx:start_idx + n_trials]
+        for start_idx in range(0, len(traces) - n_trials + 1, stride):
+            seq_traces = traces[start_idx:start_idx + n_trials]
             
             sequences.append({
-                'spectrograms': seq_specs,  # (n_trials, freq, time)
+                'traces': seq_traces,  # (n_trials, n_samples)
                 'label': label,
                 'session': session_id,
                 'start_trial': start_idx
@@ -221,7 +228,7 @@ if __name__ == "__main__":
     
     dataset = build_dataset(df)
     print(f"Processed dataset shape: {dataset.shape}")
-    print(f"Spectrogram shape: {dataset['spectrograms'].iloc[0].shape}")
+    print(f"Trace length: {len(dataset['trace'].iloc[0])}")
     
     sequences = build_trial_sequences(dataset)
     print(f"Created {len(sequences)} sequences")

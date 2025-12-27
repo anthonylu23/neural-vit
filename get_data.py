@@ -1,6 +1,4 @@
 from google.cloud import bigquery
-from tqdm import tqdm
-
 # For local auth, run: gcloud auth application-default login
 print("Using Application Default Credentials for authentication...")
 
@@ -77,7 +75,7 @@ def get_stratified_sample(client, sample_fraction=0.01):
         ac.frequency,
         ac.amplitude,
         ac.trial_num,
-        ac.trace,
+        ac.trace
     FROM `neural-ds-fe73.lab6_mouse_lfp.auditory_cortex` ac
     INNER JOIN sampled_sessions ss ON ac.session = ss.session
     """

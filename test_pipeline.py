@@ -1,8 +1,7 @@
 from preprocessing import build_dataset, build_trial_sequences
 from data_loader import create_dataloaders, normalize
-from session_splits import create_session_splits, create_kfold_splits
+from session_splits import create_session_splits_df
 import pandas as pd
-import numpy as np
 import torch
 
 
@@ -43,7 +42,7 @@ def build_test_pipeline():
 
     # 1. SPLIT RAW DATA BY SESSION
     print("\n--- SPLITTING RAW DATA ---")
-    train_df, val_df, test_df = create_session_splits(
+    train_df, val_df, test_df = create_session_splits_df(
         sample_data, test_size=0.15, val_size=0.15
     )
 
@@ -54,7 +53,7 @@ def build_test_pipeline():
         print(f"Processing {name} split ({len(df)} trials)...")
         if len(df) == 0:
             return []
-        # Parse traces, baseline correction, compute spectrograms
+        # Parse traces and baseline correction
         dataset = build_dataset(df)
         # Build sequences
         sequences = build_trial_sequences(dataset)
@@ -68,10 +67,17 @@ def build_test_pipeline():
     # 3. NORMALIZE
     # Compute stats from training, apply to all
     print("\n--- NORMALIZATION ---")
+    spectrogram_params = {
+        'fs': 1000,
+        'nperseg': 128,
+        'noverlap': 120,
+        'freq_max': None,
+        'log_scale': True
+    }
     if len(train_seqs) > 0:
-        train_seqs, stats = normalize(train_seqs, global_normalization=True)
-        val_seqs, _ = normalize(val_seqs, global_normalization=True, stats=stats)
-        test_seqs, _ = normalize(test_seqs, global_normalization=True, stats=stats)
+        train_seqs, stats = normalize(
+            train_seqs, global_normalization=True, spectrogram_params=spectrogram_params
+        )
         print(f"Normalization stats - mean: {stats['mean']:.4f}, std: {stats['std']:.4f}")
     else:
         print("⚠️ Warning: Training set is empty, skipping normalization.")
@@ -79,7 +85,13 @@ def build_test_pipeline():
     
     # 4. CREATE DATALOADERS
     train_loader, val_loader, test_loader = create_dataloaders(
-        train_seqs, val_seqs, test_seqs, batch_size=16
+        train_seqs,
+        val_seqs,
+        test_seqs,
+        batch_size=16,
+        spectrogram_params=spectrogram_params,
+        normalization_stats=stats,
+        global_normalization=True
     )
     
     return train_loader, val_loader, test_loader, stats

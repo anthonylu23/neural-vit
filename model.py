@@ -1,12 +1,7 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-from functools import partial
 from typing import Optional
-import math
-
 from dataclasses import dataclass
-from typing import Tuple
 
 @dataclass
 class Temporal3DViTConfig:
@@ -191,6 +186,12 @@ class Temporal3DViT(nn.Module):
     def __init__(self, config: Temporal3DViTConfig):
         super().__init__()
         self.config = config
+        if config.n_trials % config.patch_trial != 0:
+            raise ValueError("n_trials must be divisible by patch_trial.")
+        if config.freq_size % config.patch_freq != 0:
+            raise ValueError("freq_size must be divisible by patch_freq.")
+        if config.time_size % config.patch_time != 0:
+            raise ValueError("time_size must be divisible by patch_time.")
 
         # Patch embedding via 3D convolution
         self.patch_embed = nn.Conv3d(
