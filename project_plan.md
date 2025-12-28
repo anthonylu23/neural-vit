@@ -47,26 +47,47 @@
 
 ## Phase 2: Cloud Migration & Pipeline (Current Focus)
 
-### Step 1: Split & Export Script (`export_to_gcs.py`)
-- [ ] **Query BigQuery**: Fetch all raw traces.
-- [ ] **Split**: Use `session_splits.py` to create Train/Val/Test DataFrames.
-- [ ] **Compute Stats**: Calculate Global Mean/Std from a sample of the Train split.
+### Step 1: GCS Setup (once)
+- [ ] **Bucket**: Create GCS bucket for data and outputs.
+- [ ] **Permissions**: Vertex service account needs BigQuery read + GCS write.
+
+### Step 2: Export Full Dataset → GCS (`export_to_gcs.py`)
+- [ ] **Query BigQuery**: Fetch full raw traces.
+- [ ] **Split**: Use `create_session_splits_df` to get train/val/test by session.
 - [ ] **Upload**:
-    - `gs://.../v1/train.parquet`
-    - `gs://.../v1/val.parquet`
-    - `gs://.../v1/test.parquet`
-    - `gs://.../v1/stats.json`
+  - `gs://.../v1/train.parquet`
+  - `gs://.../v1/val.parquet`
+  - `gs://.../v1/test.parquet`
 
-### Step 2: Cloud Dataset (`gcs_dataset.py`)
-- [x] **Implementation**: `GCSTrialSequenceDataset` created.
-- [x] **Lazy Loading**: Implemented to parse traces and compute spectrograms on-the-fly.
-- [x] **Normalization**: Integrated `normalization_stats` into `__getitem__`.
+**Brief run (Vertex/Workbench):**
+```python
+from export_to_gcs import export_full_dataset_to_gcs
+export_full_dataset_to_gcs(project_id, dataset_id, table_id, bucket_name, prefix="neural/v1")
+```
 
-### Step 3: Training Script (`train.py`)
-- [ ] **Argument Parsing**: Update to accept GCS paths and hyperparams.
-- [ ] **Integration**: Use `GCSTrialSequenceDataset` with `stats.json`.
-- [ ] **Model**: Finalize `Temporal3DViT` implementation (currently a placeholder).
-- [ ] **Logging**: Integrate `wandb` or TensorBoard.
+### Step 3: Compute Normalization Stats
+- [ ] **Train Only**: Use `build_global_normalizer()` on the train dataset.
+- [ ] **Save**: Persist `stats.json` alongside GCS data.
+
+### Step 4: Cloud Dataset (`gcs_dataset.py`)
+- [x] **Streaming**: Metadata-only index; traces loaded per row group.
+- [x] **On-the-fly Specs**: Baseline → spectrogram in `__getitem__`.
+- [ ] **Normalization**: Apply stats via `transform` (not inside dataset).
+
+### Step 5: Vertex Training Job
+- [ ] **Train Script**: Accept `--train/--val/--test` GCS paths + `--stats`.
+- [ ] **Data**: `GCSTrialSequenceDataset` with `transform=normalize_fn`.
+- [ ] **Outputs**: Save checkpoints and metrics to GCS.
+
+**Brief custom job (example):**
+```bash
+gcloud ai custom-jobs create --region=us-central1 --display-name=vit-train \
+  --worker-pool-spec=machine-type=n1-standard-8,replica-count=1,container-image-uri=IMAGE_URI,command=python,args=train.py,--train,gs://.../train.parquet,--val,gs://.../val.parquet,--test,gs://.../test.parquet,--stats,gs://.../stats.json
+```
+
+### Step 6: Vertex Eval Job
+- [ ] **Load Best Checkpoint** from GCS.
+- [ ] **Run Test Eval** and export metrics (JSON + confusion matrix).
 
 ---
 
