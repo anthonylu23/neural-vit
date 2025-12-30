@@ -87,9 +87,10 @@ def get_stratified_sample(client, sample_fraction=0.01):
 
 def main():
     client = bigquery.Client(project='neural-ds-fe73')
-    sample_data = get_stratified_sample(client, sample_fraction= 0.01)
-    sample_data.to_parquet('sample_data.parquet')
-    print(sample_data.head())
+    # sample_data = get_stratified_sample(client, sample_fraction= 0.01)
+    # sample_data.to_parquet('sample_data.parquet')
+    dataset_stats_df = dataset_stats(client)
+    print(dataset_stats_df)
 
 if __name__ == "__main__":
     main()   

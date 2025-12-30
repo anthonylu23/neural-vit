@@ -1,2 +1,4 @@
 sample_data.parquet
 sequences.pkl
+.env
+lfp-temporal-vit-4ed8788c0fb9.json
