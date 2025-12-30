@@ -52,7 +52,7 @@ def export_full_dataset_to_gcs(
 
 if __name__ == "__main__":
     export_full_dataset_to_gcs(
-        bq_project_id="lfp-temporal-vit",
+        bq_project_id="neural-ds-fe73",
         bq_dataset_id="lab6_mouse_lfp",
         bq_table_id="auditory_cortex",
         gcs_bucket="lfp_spec_datasets",
