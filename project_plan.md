@@ -38,9 +38,9 @@
 
 | Task | Status | Output |
 | --- | --- | --- |
-| **Data Inventory** | ✅ | `data_audit.py` reports dataset stats. |
-| **Preprocessing Logic** | ✅ | `preprocessing.py` verified (Baseline -> Window -> Spec). |
-| **Local Pipeline** | ✅ | `test_pipeline.py` verifies end-to-end flow. |
+| **Data Inventory** | ✅ | `temporal_vit/data/data_audit.py` reports dataset stats. |
+| **Preprocessing Logic** | ✅ | `temporal_vit/data/preprocessing_local.py` verified (Baseline -> Window -> Spec). |
+| **Local Pipeline** | ✅ | `temporal_vit/local/test_pipeline.py` verifies end-to-end flow. |
 | **Normalization** | ✅ | Iterative Global Normalization implemented (prevented OOM). |
 
 ---
@@ -51,7 +51,7 @@
 - [ ] **Bucket**: Create GCS bucket for data and outputs.
 - [ ] **Permissions**: Vertex service account needs BigQuery read + GCS write.
 
-### Step 2: Export Full Dataset → GCS (`export_to_gcs.py`)
+### Step 2: Export Full Dataset → GCS (`temporal_vit/cloud/export_to_gcs.py`)
 - [ ] **Query BigQuery**: Fetch full raw traces.
 - [ ] **Split**: Use `create_session_splits_df` to get train/val/test by session.
 - [ ] **Upload**:
@@ -61,7 +61,7 @@
 
 **Brief run (Vertex/Workbench):**
 ```python
-from export_to_gcs import export_full_dataset_to_gcs
+from temporal_vit.cloud.export_to_gcs import export_full_dataset_to_gcs
 export_full_dataset_to_gcs(project_id, dataset_id, table_id, bucket_name, prefix="neural/v1")
 ```
 
@@ -69,7 +69,7 @@ export_full_dataset_to_gcs(project_id, dataset_id, table_id, bucket_name, prefix
 - [ ] **Train Only**: Use `build_global_normalizer()` on the train dataset.
 - [ ] **Save**: Persist `stats.json` alongside GCS data.
 
-### Step 4: Cloud Dataset (`gcs_dataset.py`)
+### Step 4: Cloud Dataset (`temporal_vit/data/gcs_dataset.py`)
 - [x] **Streaming**: Metadata-only index; traces loaded per row group.
 - [x] **On-the-fly Specs**: Baseline → spectrogram in `__getitem__`.
 - [ ] **Normalization**: Apply stats via `transform` (not inside dataset).

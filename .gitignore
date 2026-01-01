@@ -1,4 +1,7 @@
-sample_data.parquet
-sequences.pkl
+data/sample_data.parquet
+data/sequences.pkl
 .env
 lfp-temporal-vit-4ed8788c0fb9.json
+data/neural_v1_test.parquet
+__pycache__/
+*.pyc
