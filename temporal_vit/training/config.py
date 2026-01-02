@@ -11,6 +11,8 @@ class TrainConfig:
     test_paths: List[str]
     stats_path: Optional[str] = None
     output_dir: Optional[str] = None
+    use_preprocessed: bool = False
+    spectrogram_column: str = "spectrogram"
 
     epochs: int = 10
     batch_size: int = 16

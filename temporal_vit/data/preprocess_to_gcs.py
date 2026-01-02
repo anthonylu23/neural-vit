@@ -58,7 +58,7 @@ def _write_json(path: str, payload: dict):
     Path(path).write_bytes(content)
 
 
-def compute_trace_stats(
+def compute_spectrogram_stats(
     input_paths: Iterable[str],
     fs: int = 1000,
     baseline_end: float = 2.0,
@@ -231,7 +231,7 @@ def preprocess_splits_to_gcs(
     stats = None
     if normalize:
         print("Computing normalization stats from training data...")
-        stats = compute_trace_stats(
+        stats = compute_spectrogram_stats(
             train_inputs,
             fs=fs,
             baseline_end=baseline_end,
@@ -299,7 +299,7 @@ def main():
     train_output = f"gs://{bucket_name}/{prefix}/train_preprocessed.parquet"
     val_output = f"gs://{bucket_name}/{prefix}/val_preprocessed.parquet"
     test_output = f"gs://{bucket_name}/{prefix}/test_preprocessed.parquet"
-    stats_output = f"gs://{bucket_name}/{prefix}/trace_norm_stats.json"
+    stats_output = f"gs://{bucket_name}/{prefix}/spectrogram_norm_stats.json"
 
     preprocess_splits_to_gcs(
         train_input,

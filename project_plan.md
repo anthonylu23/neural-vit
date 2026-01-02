@@ -8,7 +8,7 @@
 
 **Goal**: Build a Vision Transformer that processes sequences of LFP spectrograms across trials to classify WT vs FMR1 knockout mice, capturing trial-to-trial dynamics that single-trial models miss.
 
-**Dataset**: Mouse auditory cortex LFP from `lab6/8` (WT vs FMR1, ~40 sessions)
+**Dataset**: Mouse auditory cortex LFP from `lab6/8` (WT vs FMR1, ~32 sessions, ~77k trials)
 
 **Status**: Phase 1 (Data Prep) Complete. Moving to Cloud Migration & Model Training.
 
@@ -27,8 +27,8 @@
 └─────────────┘     └──────────┬──────────┘     └─────────────────────┘
                                │
                        ┌───────▼────────┐
-                       │ metadata.json  │
-                       │ (norm stats)   │
+                       │ stats.json     │
+                       │ (spec stats)   │
                        └────────────────┘
 ```
 
@@ -39,9 +39,9 @@
 | Task | Status | Output |
 | --- | --- | --- |
 | **Data Inventory** | ✅ | `temporal_vit/data/data_audit.py` reports dataset stats. |
-| **Preprocessing Logic** | ✅ | `temporal_vit/data/preprocessing_local.py` verified (Baseline -> Window -> Spec). |
+| **Preprocessing Logic** | ✅ | `temporal_vit/data/preprocessing_local.py` verified (Baseline -> Window). |
 | **Local Pipeline** | ✅ | `temporal_vit/local/test_pipeline.py` verifies end-to-end flow. |
-| **Normalization** | ✅ | Iterative Global Normalization implemented (prevented OOM). |
+| **Normalization** | ✅ | Global normalization implemented (data loader + training). |
 
 ---
 
@@ -65,24 +65,39 @@ from temporal_vit.cloud.export_to_gcs import export_full_dataset_to_gcs
 export_full_dataset_to_gcs(project_id, dataset_id, table_id, bucket_name, prefix="neural/v1")
 ```
 
-### Step 3: Compute Normalization Stats
-- [ ] **Train Only**: Use `build_global_normalizer()` on the train dataset.
-- [ ] **Save**: Persist `stats.json` alongside GCS data.
+### Step 3: Preprocess + Spectrogram Normalization (Optional)
+- [x] **Script**: `temporal_vit/data/preprocess_to_gcs.py`
+- [x] **Train Only Stats**: Compute global spectrogram mean/std from train.
+- [x] **Write Outputs**:
+  - `gs://.../v1/train_preprocessed.parquet`
+  - `gs://.../v1/val_preprocessed.parquet`
+  - `gs://.../v1/test_preprocessed.parquet`
+  - `gs://.../v1/trace_norm_stats.json` (spectrogram stats)
 
 ### Step 4: Cloud Dataset (`temporal_vit/data/gcs_dataset.py`)
 - [x] **Streaming**: Metadata-only index; traces loaded per row group.
 - [x] **On-the-fly Specs**: Baseline → spectrogram in `__getitem__`.
+- [x] **GCS Paths**: Accepts `gs://...` and normalizes for PyArrow.
 - [ ] **Normalization**: Apply stats via `transform` (not inside dataset).
 
-### Step 5: Vertex Training Job
-- [ ] **Train Script**: Accept `--train/--val/--test` GCS paths + `--stats`.
-- [ ] **Data**: `GCSTrialSequenceDataset` with `transform=normalize_fn`.
-- [ ] **Outputs**: Save checkpoints and metrics to GCS.
+### Step 5: Training Script + Docker
+- [x] **Train Script**: `temporal_vit/training/train.py` uses `TrainConfig` in code.
+- [x] **Data**: `GCSTrialSequenceDataset` with `transform=normalize_fn`.
+- [x] **Metrics**: Accuracy + AUC in eval.
+- [ ] **Outputs**: Save checkpoints and stats to GCS (currently local paths).
 
-**Brief custom job (example):**
+**Dockerfile** (root):
 ```bash
-gcloud ai custom-jobs create --region=us-central1 --display-name=vit-train \
-  --worker-pool-spec=machine-type=n1-standard-8,replica-count=1,container-image-uri=IMAGE_URI,command=python,args=train.py,--train,gs://.../train.parquet,--val,gs://.../val.parquet,--test,gs://.../test.parquet,--stats,gs://.../stats.json
+docker build -t temporal-vit:latest .
+```
+
+**Artifact Registry Image**:
+`us-central1-docker.pkg.dev/lfp-temporal-vit/vertex-job1/temporal-vit:latest`
+
+**Brief custom job (CPU example):**
+```bash
+gcloud ai custom-jobs create --region=us-central1 --display-name=temporal-vit-train-cpu \
+  --worker-pool-spec=machine-type=n1-standard-8,replica-count=1,container-image-uri=us-central1-docker.pkg.dev/lfp-temporal-vit/vertex-job1/temporal-vit:latest
 ```
 
 ### Step 6: Vertex Eval Job
@@ -94,8 +109,8 @@ gcloud ai custom-jobs create --region=us-central1 --display-name=vit-train \
 ## Phase 3: Model Development & Experiments (Upcoming)
 
 ### Architecture Implementation
-- [ ] **3D Embeddings**: Implement Factorized 3D Positional Embeddings.
-- [ ] **Transformer**: Implement `Temporal3DViT` with LayerScale/Stochastic Depth.
+- [x] **3D Embeddings**: Factorized 3D positional embeddings in `temporal_vit/models/model.py`.
+- [x] **Transformer**: `Temporal3DViT` with LayerScale/Stochastic Depth.
 
 ### Experiment Matrix
 | Exp ID | Model | n_trials | Status |
@@ -110,5 +125,5 @@ gcloud ai custom-jobs create --region=us-central1 --display-name=vit-train \
 ## Phase 4: Evaluation
 
 - [ ] **Test Set Eval**: Run best model on held-out Test split.
-- [ ] **Metrics**: Accuracy, F1, Confusion Matrix.
+- [ ] **Metrics**: Accuracy, AUC, F1, Confusion Matrix.
 - [ ] **Interpretability**: Visualize attention maps (Time vs. Trial).

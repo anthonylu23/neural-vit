@@ -28,6 +28,7 @@ class GCSTrialSequenceDataset(Dataset):
         n_trials: int = 8,
         stride: int = 4,
         spectrogram_config: dict = None,
+        spectrogram_column: Optional[str] = None,
         normalization_stats: Optional[dict] = None,  # unused (apply via transform)
         baseline_end: float = 2.0,
         fs: int = 1000,
@@ -41,6 +42,7 @@ class GCSTrialSequenceDataset(Dataset):
             n_trials: Number of trials per sequence.
             stride: Stride for sliding window sequences.
             spectrogram_config: Dict with keys 'nperseg', 'noverlap', 'freq_max', 'log_scale'.
+            spectrogram_column: If set, read this column as precomputed spectrograms.
             normalization_stats: Unused; compute stats via build_global_normalizer().
             baseline_end: Time (s) to use for baseline correction.
             fs: Sampling frequency.
@@ -57,6 +59,7 @@ class GCSTrialSequenceDataset(Dataset):
         self.filesystem = self._init_filesystem(data_paths)
         self._parquet_files = {}
         self.cache_dir = cache_dir
+        self.spectrogram_column = spectrogram_column
 
         self.spec_config = spectrogram_config or {
             'nperseg': 128,
@@ -161,11 +164,16 @@ class GCSTrialSequenceDataset(Dataset):
         return parse_trace(trace_entry)
 
     def _process_single_trial(self, idx: int) -> np.ndarray:
-        """Fetch raw trace, apply baseline correction, compute spectrogram."""
+        """Fetch raw trace or spectrogram, optionally apply preprocessing."""
         row = self.index_df.iloc[idx]
         pf = self._get_parquet_file(int(row['frag_id']))
         rg_id = int(row['row_group'])
         row_in_group = int(row['row_in_group'])
+
+        if self.spectrogram_column:
+            table = pf.read_row_group(rg_id, columns=[self.spectrogram_column])
+            spec_entry = table.column(self.spectrogram_column)[row_in_group].as_py()
+            return np.array(spec_entry)
 
         table = pf.read_row_group(rg_id, columns=['trace'])
         trace_entry = table.column('trace')[row_in_group].as_py()

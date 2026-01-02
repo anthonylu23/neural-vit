@@ -1,4 +1,3 @@
-import json
 from dataclasses import asdict
 from pathlib import Path
 
@@ -6,26 +5,9 @@ import torch
 from torch.utils.data import DataLoader
 from sklearn.metrics import roc_auc_score
 
-from temporal_vit.data.gcs_dataset import GCSTrialSequenceDataset, build_global_normalizer
+from temporal_vit.data.gcs_dataset import GCSTrialSequenceDataset
 from temporal_vit.models.model import Temporal3DViT, Temporal3DViTConfig, CONFIGS
 from temporal_vit.training.config import TrainConfig
-
-
-def load_stats(path: Path):
-    if not path.exists():
-        return None
-    return json.loads(path.read_text())
-
-
-def save_stats(path: Path, stats: dict):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(stats, indent=2))
-
-
-def make_normalize_fn(stats: dict):
-    def _normalize(x):
-        return (x - stats["mean"]) / (stats["std"] + 1e-8)
-    return _normalize
 
 
 def infer_input_dims(dataset: GCSTrialSequenceDataset):
@@ -89,45 +71,38 @@ def train(cfg: TrainConfig):
     if not cfg.train_paths or not cfg.val_paths or not cfg.test_paths:
         raise ValueError("train_paths, val_paths, and test_paths must be provided.")
 
-    stats_path = Path(cfg.stats_path) if cfg.stats_path else None
-
     spec_config = {
         "nperseg": cfg.nperseg,
         "noverlap": cfg.noverlap,
         "freq_max": cfg.freq_max,
         "log_scale": cfg.log_scale,
     }
+    spectrogram_column = cfg.spectrogram_column if cfg.use_preprocessed else None
+    if cfg.use_preprocessed and cfg.stats_path:
+        print("Using preprocessed spectrograms; stats_path will be ignored.")
+
     print("Initializing training dataset...")
     train_ds = GCSTrialSequenceDataset(
         cfg.train_paths,
         n_trials=cfg.n_trials,
         stride=cfg.stride,
         spectrogram_config=spec_config,
+        spectrogram_column=spectrogram_column,
         baseline_end=cfg.baseline_end,
         fs=cfg.fs,
     )
     print(f"Training dataset ready. Sequences: {len(train_ds)}")
 
-    stats = load_stats(stats_path) if stats_path else None
-    if stats is None:
-        print("Computing normalization stats from training data...")
-        stats, _ = build_global_normalizer(train_ds)
-        print(f"Normalization stats ready. Mean={stats['mean']:.4f} Std={stats['std']:.4f}")
-        if stats_path:
-            save_stats(stats_path, stats)
-
-    normalize_fn = make_normalize_fn(stats)
-
-    train_ds.transform = normalize_fn
+    stats = None
     print("Initializing validation dataset...")
     val_ds = GCSTrialSequenceDataset(
         cfg.val_paths,
         n_trials=cfg.n_trials,
         stride=cfg.stride,
         spectrogram_config=spec_config,
+        spectrogram_column=spectrogram_column,
         baseline_end=cfg.baseline_end,
         fs=cfg.fs,
-        transform=normalize_fn,
     )
     print(f"Validation dataset ready. Sequences: {len(val_ds)}")
     print("Initializing test dataset...")
@@ -136,9 +111,9 @@ def train(cfg: TrainConfig):
         n_trials=cfg.n_trials,
         stride=cfg.stride,
         spectrogram_config=spec_config,
+        spectrogram_column=spectrogram_column,
         baseline_end=cfg.baseline_end,
         fs=cfg.fs,
-        transform=normalize_fn,
     )
     print(f"Test dataset ready. Sequences: {len(test_ds)}")
 
@@ -221,7 +196,6 @@ def train(cfg: TrainConfig):
             ckpt = {
                 "model_state": model.state_dict(),
                 "config": asdict(model.config),
-                "stats": stats,
             }
             torch.save(ckpt, output_dir / "best.pt")
 
@@ -232,7 +206,6 @@ def train(cfg: TrainConfig):
         ckpt = {
             "model_state": model.state_dict(),
             "config": asdict(model.config),
-            "stats": stats,
         }
         torch.save(ckpt, output_dir / "last.pt")
 
@@ -241,10 +214,11 @@ def main():
     bucket_name = "lfp_spec_datasets"
     prefix = "neural/v1"
     config = TrainConfig(
-        train_paths=[f"gs://{bucket_name}/{prefix}/train.parquet"],
-        val_paths=[f"gs://{bucket_name}/{prefix}/val.parquet"],
-        test_paths=[f"gs://{bucket_name}/{prefix}/test.parquet"],
-        stats_path="runs/run1/stats.json",
+        train_paths=[f"gs://{bucket_name}/{prefix}/train_preprocessed.parquet"],
+        val_paths=[f"gs://{bucket_name}/{prefix}/val_preprocessed.parquet"],
+        test_paths=[f"gs://{bucket_name}/{prefix}/test_preprocessed.parquet"],
+        use_preprocessed=True,
+        stats_path=None,
         output_dir="runs/run1",
     )
     train(config)
