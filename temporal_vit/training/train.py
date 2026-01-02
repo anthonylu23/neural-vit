@@ -4,6 +4,7 @@ from pathlib import Path
 
 import torch
 from torch.utils.data import DataLoader
+from sklearn.metrics import roc_auc_score
 
 from temporal_vit.data.gcs_dataset import GCSTrialSequenceDataset, build_global_normalizer
 from temporal_vit.models.model import Temporal3DViT, Temporal3DViTConfig, CONFIGS
@@ -60,6 +61,8 @@ def evaluate(model, loader, device):
     correct = 0
     total_loss = 0.0
     criterion = torch.nn.CrossEntropyLoss()
+    all_probs = []
+    all_labels = []
     with torch.no_grad():
         for specs, labels in loader:
             specs = specs.to(device, non_blocking=True)
@@ -70,9 +73,16 @@ def evaluate(model, loader, device):
             preds = torch.argmax(logits, dim=1)
             correct += (preds == labels).sum().item()
             total += labels.size(0)
+            probs = torch.softmax(logits, dim=1)[:, 1].detach().cpu().numpy()
+            all_probs.extend(probs.tolist())
+            all_labels.extend(labels.detach().cpu().numpy().tolist())
     avg_loss = total_loss / max(total, 1)
     acc = correct / max(total, 1)
-    return avg_loss, acc
+    try:
+        auc = roc_auc_score(all_labels, all_probs)
+    except ValueError:
+        auc = float("nan")
+    return avg_loss, acc, auc
 
 
 def train(cfg: TrainConfig):
@@ -191,11 +201,11 @@ def train(cfg: TrainConfig):
         train_loss = running_loss / max(total, 1)
         train_acc = correct / max(total, 1)
 
-        val_loss, val_acc = evaluate(model, val_loader, device)
+        val_loss, val_acc, val_auc = evaluate(model, val_loader, device)
         print(
             f"Epoch {epoch}/{cfg.epochs} | "
             f"train loss {train_loss:.4f}, acc {train_acc:.4f} | "
-            f"val loss {val_loss:.4f}, acc {val_acc:.4f}"
+            f"val loss {val_loss:.4f}, acc {val_acc:.4f}, auc {val_auc:.4f}"
         )
 
         if output_dir and val_acc > best_val_acc:
@@ -207,8 +217,8 @@ def train(cfg: TrainConfig):
             }
             torch.save(ckpt, output_dir / "best.pt")
 
-    test_loss, test_acc = evaluate(model, test_loader, device)
-    print(f"Test loss {test_loss:.4f}, acc {test_acc:.4f}")
+    test_loss, test_acc, test_auc = evaluate(model, test_loader, device)
+    print(f"Test loss {test_loss:.4f}, acc {test_acc:.4f}, auc {test_auc:.4f}")
 
     if output_dir:
         ckpt = {
@@ -220,11 +230,12 @@ def train(cfg: TrainConfig):
 
 
 def main():
+    bucket_name = "lfp_spec_datasets"
+    prefix = "neural/v1"
     config = TrainConfig(
-        train_paths=["gs://your-bucket/train.parquet"],
-        val_paths=["gs://your-bucket/val.parquet"],
-        test_paths=["gs://your-bucket/test.parquet"],
-        stats_path="stats.json",
+        train_paths=[f"gs://{bucket_name}/{prefix}/train.parquet"],
+        val_paths=[f"gs://{bucket_name}/{prefix}/val.parquet"],
+        test_paths=[f"gs://{bucket_name}/{prefix}/test.parquet"],
         output_dir="runs/run1",
     )
     train(config)

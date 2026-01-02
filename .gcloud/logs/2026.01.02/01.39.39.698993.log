@@ -1,0 +1,71 @@
+2026-01-02 01:39:39,700 DEBUG    root            Loaded Command Group: ['gcloud', 'artifacts']
+2026-01-02 01:39:39,703 DEBUG    root            Loaded Command Group: ['gcloud', 'artifacts', 'repositories']
+2026-01-02 01:39:39,854 DEBUG    root            Loaded Command Group: ['gcloud', 'artifacts', 'repositories', 'list']
+2026-01-02 01:39:39,861 DEBUG    root            Running [gcloud.artifacts.repositories.list] with arguments: [--location: "us-central1", --project: "lfp-temporal-vit"]
+2026-01-02 01:39:39,861 INFO     ___FILE_ONLY___ Listing items under project lfp-temporal-vit, location us-central1.
+
+
+2026-01-02 01:39:39,912 DEBUG    root            (gcloud.artifacts.repositories.list) 'NoActiveAccountException' object has no attribute 'content'
+Traceback (most recent call last):
+  File "/opt/homebrew/share/google-cloud-sdk/lib/googlecloudsdk/command_lib/artifacts/util.py", line 697, in ListRepos
+    results = pool.Map(
+        lambda x: ListLocationRepos(
+    ...<5 lines>...
+        loc_paths,
+    )
+  File "/opt/homebrew/share/google-cloud-sdk/lib/googlecloudsdk/core/util/parallel.py", line 100, in Map
+    return self.MapAsync(func, iterable).Get()
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "/opt/homebrew/share/google-cloud-sdk/lib/googlecloudsdk/core/util/parallel.py", line 143, in Get
+    return self.GetResult().GetOrRaise()
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "/opt/homebrew/share/google-cloud-sdk/lib/googlecloudsdk/core/util/parallel.py", line 184, in GetOrRaise
+    raise self.error  # pylint: disable=raising-bad-type
+    ^^^^^^^^^^^^^^^^
+googlecloudsdk.core.util.parallel.MultiError: One or more errors occurred:
+NoActiveAccountException: You do not currently have an active account selected.
+Please run:
+
+  $ gcloud auth login
+
+to obtain new credentials.
+
+If you have already logged in with a different account, run:
+
+  $ gcloud config set account ACCOUNT
+
+to select an already authenticated account to use.
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/opt/homebrew/share/google-cloud-sdk/lib/googlecloudsdk/command_lib/artifacts/util.py", line 762, in RetryOnInvalidArguments
+    results = func(**kwargs)
+  File "/opt/homebrew/share/google-cloud-sdk/lib/googlecloudsdk/command_lib/artifacts/util.py", line 713, in ListRepos
+    error_set = set(err.content for err in e.errors)
+  File "/opt/homebrew/share/google-cloud-sdk/lib/googlecloudsdk/command_lib/artifacts/util.py", line 713, in <genexpr>
+    error_set = set(err.content for err in e.errors)
+                    ^^^^^^^^^^^
+AttributeError: 'NoActiveAccountException' object has no attribute 'content'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/opt/homebrew/share/google-cloud-sdk/lib/googlecloudsdk/calliope/cli.py", line 944, in Execute
+    resources = calliope_command.Run(cli=self, args=args)
+  File "/opt/homebrew/share/google-cloud-sdk/lib/googlecloudsdk/calliope/backend.py", line 955, in Run
+    resources = command_instance.Run(args)
+  File "/opt/homebrew/share/google-cloud-sdk/lib/surface/artifacts/repositories/list.py", line 118, in Run
+    return util.ListRepositories(args)
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^
+  File "/opt/homebrew/share/google-cloud-sdk/lib/googlecloudsdk/command_lib/artifacts/util.py", line 726, in ListRepositories
+    server_args_skipped, result = RetryOnInvalidArguments(
+                                  ~~~~~~~~~~~~~~~~~~~~~~~^
+        ListRepos,
+        ^^^^^^^^^^
+        **server_args)
+        ^^^^^^^^^^^^^^
+  File "/opt/homebrew/share/google-cloud-sdk/lib/googlecloudsdk/command_lib/artifacts/util.py", line 786, in RetryOnInvalidArguments
+    raise ar_exceptions.ArtifactRegistryError(e)
+googlecloudsdk.api_lib.artifacts.exceptions.ArtifactRegistryError: 'NoActiveAccountException' object has no attribute 'content'
+2026-01-02 01:39:39,915 ERROR    root            (gcloud.artifacts.repositories.list) 'NoActiveAccountException' object has no attribute 'content'

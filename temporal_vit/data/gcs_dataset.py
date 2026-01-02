@@ -83,7 +83,11 @@ class GCSTrialSequenceDataset(Dataset):
 
     def _build_index(self, paths: List[str]) -> Tuple[pd.DataFrame, List[str]]:
         """Load metadata only and build row-group index."""
-        dataset = ds.dataset(paths, format="parquet", filesystem=self.filesystem)
+        normalized_paths = [
+            path.replace("gs://", "", 1) if path.startswith("gs://") else path
+            for path in paths
+        ]
+        dataset = ds.dataset(normalized_paths, format="parquet", filesystem=self.filesystem)
         fragments = list(dataset.get_fragments())
         index_frames = []
         fragment_paths = []
