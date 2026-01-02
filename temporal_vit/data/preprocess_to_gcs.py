@@ -7,6 +7,8 @@ import pyarrow as pa
 import pyarrow.dataset as ds
 import pyarrow.parquet as pq
 import pyarrow.fs as pafs
+import concurrent.futures
+import multiprocessing as mp
 
 from temporal_vit.data.preprocessing_core import (
     process_trace_column,
@@ -210,6 +212,12 @@ def preprocess_parquet_to_gcs(
         raise ValueError("No rows were read from input paths.")
 
 
+def _run_split_job(name, inputs, output, kwargs):
+    print(f"Processing {name} split...")
+    preprocess_parquet_to_gcs(inputs, output, **kwargs)
+    return name, output
+
+
 def preprocess_splits_to_gcs(
     train_inputs: Iterable[str],
     val_inputs: Iterable[str],
@@ -227,6 +235,8 @@ def preprocess_splits_to_gcs(
     stats_output_path: Optional[str] = None,
     spectrogram_config: Optional[dict] = None,
     keep_trace: bool = True,
+    parallel: bool = False,
+    parallel_workers: Optional[int] = None,
 ):
     stats = None
     if normalize:
@@ -245,10 +255,7 @@ def preprocess_splits_to_gcs(
         if stats_output_path:
             _write_json(stats_output_path, stats)
 
-    print("Processing train split...")
-    preprocess_parquet_to_gcs(
-        train_inputs,
-        train_output,
+    common_kwargs = dict(
         fs=fs,
         baseline_end=baseline_end,
         apply_time_window=apply_time_window,
@@ -259,34 +266,32 @@ def preprocess_splits_to_gcs(
         spectrogram_config=spectrogram_config,
         keep_trace=keep_trace,
     )
-    print("Processing val split...")
-    preprocess_parquet_to_gcs(
-        val_inputs,
-        val_output,
-        fs=fs,
-        baseline_end=baseline_end,
-        apply_time_window=apply_time_window,
-        start_time=start_time,
-        end_time=end_time,
-        batch_size=batch_size,
-        normalize_stats=stats,
-        spectrogram_config=spectrogram_config,
-        keep_trace=keep_trace,
-    )
-    print("Processing test split...")
-    preprocess_parquet_to_gcs(
-        test_inputs,
-        test_output,
-        fs=fs,
-        baseline_end=baseline_end,
-        apply_time_window=apply_time_window,
-        start_time=start_time,
-        end_time=end_time,
-        batch_size=batch_size,
-        normalize_stats=stats,
-        spectrogram_config=spectrogram_config,
-        keep_trace=keep_trace,
-    )
+
+    splits = [
+        ("train", train_inputs, train_output),
+        ("val", val_inputs, val_output),
+        ("test", test_inputs, test_output),
+    ]
+
+    if not parallel:
+        for name, inputs, output in splits:
+            print(f"Processing {name} split...")
+            preprocess_parquet_to_gcs(inputs, output, **common_kwargs)
+        return
+
+    max_workers = parallel_workers or len(splits)
+    context = mp.get_context("spawn")
+    with concurrent.futures.ProcessPoolExecutor(
+        max_workers=max_workers,
+        mp_context=context
+    ) as executor:
+        futures = [
+            executor.submit(_run_split_job, name, inputs, output, common_kwargs)
+            for name, inputs, output in splits
+        ]
+        for future in concurrent.futures.as_completed(futures):
+            name, output = future.result()
+            print(f"{name} split complete: {output}")
 
 
 def main():
@@ -319,6 +324,7 @@ def main():
             "freq_max": None,
             "log_scale": True,
         },
+        parallel=True,
     )
 
 
