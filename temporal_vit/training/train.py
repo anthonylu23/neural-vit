@@ -97,6 +97,7 @@ def train(cfg: TrainConfig):
         "freq_max": cfg.freq_max,
         "log_scale": cfg.log_scale,
     }
+    print("Initializing training dataset...")
     train_ds = GCSTrialSequenceDataset(
         cfg.train_paths,
         n_trials=cfg.n_trials,
@@ -105,16 +106,20 @@ def train(cfg: TrainConfig):
         baseline_end=cfg.baseline_end,
         fs=cfg.fs,
     )
+    print(f"Training dataset ready. Sequences: {len(train_ds)}")
 
     stats = load_stats(stats_path) if stats_path else None
     if stats is None:
+        print("Computing normalization stats from training data...")
         stats, _ = build_global_normalizer(train_ds)
+        print(f"Normalization stats ready. Mean={stats['mean']:.4f} Std={stats['std']:.4f}")
         if stats_path:
             save_stats(stats_path, stats)
 
     normalize_fn = make_normalize_fn(stats)
 
     train_ds.transform = normalize_fn
+    print("Initializing validation dataset...")
     val_ds = GCSTrialSequenceDataset(
         cfg.val_paths,
         n_trials=cfg.n_trials,
@@ -124,6 +129,8 @@ def train(cfg: TrainConfig):
         fs=cfg.fs,
         transform=normalize_fn,
     )
+    print(f"Validation dataset ready. Sequences: {len(val_ds)}")
+    print("Initializing test dataset...")
     test_ds = GCSTrialSequenceDataset(
         cfg.test_paths,
         n_trials=cfg.n_trials,
@@ -133,6 +140,7 @@ def train(cfg: TrainConfig):
         fs=cfg.fs,
         transform=normalize_fn,
     )
+    print(f"Test dataset ready. Sequences: {len(test_ds)}")
 
     train_loader = DataLoader(
         train_ds,
@@ -236,6 +244,7 @@ def main():
         train_paths=[f"gs://{bucket_name}/{prefix}/train.parquet"],
         val_paths=[f"gs://{bucket_name}/{prefix}/val.parquet"],
         test_paths=[f"gs://{bucket_name}/{prefix}/test.parquet"],
+        stats_path="runs/run1/stats.json",
         output_dir="runs/run1",
     )
     train(config)
