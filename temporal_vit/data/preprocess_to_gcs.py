@@ -319,8 +319,8 @@ def main():
         stats_output_path=stats_output,
         spectrogram_config={
             "fs": 1000,
-            "nperseg": 128,
-            "noverlap": 120,
+            "nperseg": 126,
+            "noverlap": 116,
             "freq_max": None,
             "log_scale": True,
         },
