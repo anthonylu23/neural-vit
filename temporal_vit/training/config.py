@@ -15,7 +15,7 @@ class TrainConfig:
     spectrogram_column: str = "spectrogram"
 
     epochs: int = 10
-    batch_size: int = 16
+    batch_size: int = 4
     num_workers: int = 4
     lr: float = 3e-4
     weight_decay: float = 0.01
