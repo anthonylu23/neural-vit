@@ -71,6 +71,11 @@ def train(cfg: TrainConfig):
     if not cfg.train_paths or not cfg.val_paths or not cfg.test_paths:
         raise ValueError("train_paths, val_paths, and test_paths must be provided.")
 
+    if torch.cuda.is_available():
+        print(f"GPU available: {torch.cuda.get_device_name(0)}")
+    else:
+        print("GPU not available, running on CPU.")
+
     spec_config = {
         "nperseg": cfg.nperseg,
         "noverlap": cfg.noverlap,
@@ -117,26 +122,27 @@ def train(cfg: TrainConfig):
     )
     print(f"Test dataset ready. Sequences: {len(test_ds)}")
 
+    pin_memory = torch.cuda.is_available() and cfg.device.startswith("cuda")
     train_loader = DataLoader(
         train_ds,
         batch_size=cfg.batch_size,
         shuffle=True,
         num_workers=cfg.num_workers,
-        pin_memory=True,
+        pin_memory=pin_memory,
     )
     val_loader = DataLoader(
         val_ds,
         batch_size=cfg.batch_size,
         shuffle=False,
         num_workers=cfg.num_workers,
-        pin_memory=True,
+        pin_memory=pin_memory,
     )
     test_loader = DataLoader(
         test_ds,
         batch_size=cfg.batch_size,
         shuffle=False,
         num_workers=cfg.num_workers,
-        pin_memory=True,
+        pin_memory=pin_memory,
     )
 
     if cfg.freq_size and cfg.time_size:

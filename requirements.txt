@@ -1,7 +1,9 @@
-numpy
+--extra-index-url https://download.pytorch.org/whl/cu118
+torch==2.2.2+cu118; platform_system == "Linux"
+torch==2.2.2; platform_system != "Linux"
+numpy==1.26.4
 pandas
 scipy
-torch
 tqdm
 scikit-learn
 pyarrow
