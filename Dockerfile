@@ -1,7 +1,4 @@
-FROM python:3.10-slim
-
-ENV PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1
+FROM us-docker.pkg.dev/vertex-ai/training/pytorch-gpu.2-2.py310:latest
 
 WORKDIR /app
 
