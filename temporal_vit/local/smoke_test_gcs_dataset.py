@@ -1,12 +1,12 @@
-from temporal_vit.data.gcs_dataset import GCSTrialSequenceDataset
+from temporal_vit.data.data_loader import ParquetSequenceDataset
 
 
 def main():
-    dataset = GCSTrialSequenceDataset(
+    dataset = ParquetSequenceDataset.from_parquet(
         ["data/sample_data.parquet"],
         n_trials=4,
         stride=2,
-        use_gcs=False
+        spectrogram_column="spectrogram",
     )
     if len(dataset) == 0:
         print("No sequences found.")

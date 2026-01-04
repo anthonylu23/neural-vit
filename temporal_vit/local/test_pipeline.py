@@ -1,5 +1,6 @@
 from temporal_vit.data.preprocessing_local import build_dataset, build_trial_sequences
-from temporal_vit.data.data_loader import create_dataloaders, normalize
+from temporal_vit.data.data_loader import create_dataloaders, DataLoaderConfig
+from temporal_vit.data.preprocessing_core import compute_spectrogram_single
 from temporal_vit.data.session_splits import create_session_splits_df
 import pandas as pd
 import torch
@@ -64,37 +65,46 @@ def build_test_pipeline():
     val_seqs = process_split(val_df, 'VAL')
     test_seqs = process_split(test_df, 'TEST')
     
-    # 3. NORMALIZE
-    # Compute stats from training, apply to all
-    print("\n--- NORMALIZATION ---")
+    # 3. DATALOADERS
+    print("\n--- DATALOADERS ---")
     spectrogram_params = {
-        'fs': 1000,
-        'nperseg': 128,
-        'noverlap': 120,
-        'freq_max': None,
-        'log_scale': True
+        "fs": 1000,
+        "nperseg": 128,
+        "noverlap": 120,
+        "freq_max": None,
+        "log_scale": True,
     }
-    if len(train_seqs) > 0:
-        train_seqs, stats = normalize(
-            train_seqs, global_normalization=True, spectrogram_params=spectrogram_params
-        )
-        print(f"Normalization stats - mean: {stats['mean']:.4f}, std: {stats['std']:.4f}")
-    else:
-        print("⚠️ Warning: Training set is empty, skipping normalization.")
-        stats = {'mean': 0, 'std': 1}
-    
-    # 4. CREATE DATALOADERS
+    for seq in train_seqs:
+        specs = [
+            compute_spectrogram_single(trace, **spectrogram_params)[0]
+            for trace in seq["traces"]
+        ]
+        seq["spectrograms"] = specs
+        seq.pop("traces", None)
+    for seq in val_seqs:
+        specs = [
+            compute_spectrogram_single(trace, **spectrogram_params)[0]
+            for trace in seq["traces"]
+        ]
+        seq["spectrograms"] = specs
+        seq.pop("traces", None)
+    for seq in test_seqs:
+        specs = [
+            compute_spectrogram_single(trace, **spectrogram_params)[0]
+            for trace in seq["traces"]
+        ]
+        seq["spectrograms"] = specs
+        seq.pop("traces", None)
+    loader_cfg = DataLoaderConfig(batch_size=16, num_workers=0)
     train_loader, val_loader, test_loader = create_dataloaders(
         train_seqs,
         val_seqs,
         test_seqs,
-        batch_size=16,
-        spectrogram_params=spectrogram_params,
-        normalization_stats=stats,
-        global_normalization=True
+        loader_cfg=loader_cfg,
+        device="cpu",
     )
-    
-    return train_loader, val_loader, test_loader, stats
+
+    return train_loader, val_loader, test_loader, None
 
 
 def verify_dataloaders(train_loader, val_loader, test_loader):

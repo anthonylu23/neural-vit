@@ -2,15 +2,14 @@ from dataclasses import asdict
 from pathlib import Path
 
 import torch
-from torch.utils.data import DataLoader
 from sklearn.metrics import roc_auc_score
 
-from temporal_vit.data.gcs_dataset import GCSTrialSequenceDataset
+from temporal_vit.data.data_loader import build_parquet_dataloaders, ParquetSequenceDataset
 from temporal_vit.models.model import Temporal3DViT, Temporal3DViTConfig, CONFIGS
 from temporal_vit.training.config import TrainConfig
 
 
-def infer_input_dims(dataset: GCSTrialSequenceDataset):
+def infer_input_dims(dataset: ParquetSequenceDataset):
     specs, _ = dataset[0]
     return specs.shape[1], specs.shape[2]
 
@@ -76,74 +75,28 @@ def train(cfg: TrainConfig):
     else:
         print("GPU not available, running on CPU.")
 
-    spec_config = {
-        "nperseg": cfg.nperseg,
-        "noverlap": cfg.noverlap,
-        "freq_max": cfg.freq_max,
-        "log_scale": cfg.log_scale,
-    }
-    spectrogram_column = cfg.spectrogram_column if cfg.use_preprocessed else None
+    if not cfg.use_preprocessed:
+        raise ValueError("Training expects preprocessed spectrograms. Set use_preprocessed=True.")
+    spectrogram_column = cfg.spectrogram_column
+    if not spectrogram_column:
+        raise ValueError("spectrogram_column must be set for preprocessed datasets.")
     if cfg.use_preprocessed and cfg.stats_path:
         print("Using preprocessed spectrograms; stats_path will be ignored.")
 
-    print("Initializing training dataset...")
-    train_ds = GCSTrialSequenceDataset(
-        cfg.train_paths,
+    print("Initializing training/validation/test datasets...")
+    train_loader, val_loader, test_loader, (train_ds, val_ds, test_ds) = build_parquet_dataloaders(
+        train_paths=cfg.train_paths,
+        val_paths=cfg.val_paths,
+        test_paths=cfg.test_paths,
         n_trials=cfg.n_trials,
         stride=cfg.stride,
-        spectrogram_config=spec_config,
         spectrogram_column=spectrogram_column,
-        baseline_end=cfg.baseline_end,
-        fs=cfg.fs,
+        loader_cfg=cfg.loader,
+        device=cfg.device,
     )
     print(f"Training dataset ready. Sequences: {len(train_ds)}")
-
-    stats = None
-    print("Initializing validation dataset...")
-    val_ds = GCSTrialSequenceDataset(
-        cfg.val_paths,
-        n_trials=cfg.n_trials,
-        stride=cfg.stride,
-        spectrogram_config=spec_config,
-        spectrogram_column=spectrogram_column,
-        baseline_end=cfg.baseline_end,
-        fs=cfg.fs,
-    )
     print(f"Validation dataset ready. Sequences: {len(val_ds)}")
-    print("Initializing test dataset...")
-    test_ds = GCSTrialSequenceDataset(
-        cfg.test_paths,
-        n_trials=cfg.n_trials,
-        stride=cfg.stride,
-        spectrogram_config=spec_config,
-        spectrogram_column=spectrogram_column,
-        baseline_end=cfg.baseline_end,
-        fs=cfg.fs,
-    )
     print(f"Test dataset ready. Sequences: {len(test_ds)}")
-
-    pin_memory = torch.cuda.is_available() and cfg.device.startswith("cuda")
-    train_loader = DataLoader(
-        train_ds,
-        batch_size=cfg.batch_size,
-        shuffle=True,
-        num_workers=cfg.num_workers,
-        pin_memory=pin_memory,
-    )
-    val_loader = DataLoader(
-        val_ds,
-        batch_size=cfg.batch_size,
-        shuffle=False,
-        num_workers=cfg.num_workers,
-        pin_memory=pin_memory,
-    )
-    test_loader = DataLoader(
-        test_ds,
-        batch_size=cfg.batch_size,
-        shuffle=False,
-        num_workers=cfg.num_workers,
-        pin_memory=pin_memory,
-    )
 
     if cfg.freq_size and cfg.time_size:
         freq_size, time_size = cfg.freq_size, cfg.time_size

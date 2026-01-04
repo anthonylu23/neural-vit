@@ -1,7 +1,9 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Optional
 
 import torch
+
+from temporal_vit.data.data_loader import DataLoaderConfig
 
 
 @dataclass
@@ -15,21 +17,13 @@ class TrainConfig:
     spectrogram_column: str = "spectrogram"
 
     epochs: int = 10
-    batch_size: int = 4
-    num_workers: int = 4
+    loader: DataLoaderConfig = field(default_factory=DataLoaderConfig)
     lr: float = 3e-4
     weight_decay: float = 0.01
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
 
     n_trials: int = 8
     stride: int = 4
-    baseline_end: float = 2.0
-    fs: int = 1000
-
-    nperseg: int = 128
-    noverlap: int = 120
-    freq_max: Optional[float] = None
-    log_scale: bool = True
 
     model_size: str = "small"
     freq_size: Optional[int] = None
