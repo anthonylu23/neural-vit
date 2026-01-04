@@ -16,7 +16,7 @@ class TrainConfig:
     use_preprocessed: bool = False
     spectrogram_column: str = "spectrogram"
 
-    epochs: int = 10
+    epochs: int = 20
     loader: DataLoaderConfig = field(default_factory=DataLoaderConfig)
     lr: float = 3e-4
     weight_decay: float = 0.01
