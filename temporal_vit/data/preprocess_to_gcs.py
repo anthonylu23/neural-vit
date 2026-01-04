@@ -34,12 +34,21 @@ def _ensure_local_parent(path: str):
     Path(path).parent.mkdir(parents=True, exist_ok=True)
 
 
+def _has_min_len(trace, min_len: int) -> bool:
+    try:
+        return len(trace) >= min_len
+    except TypeError:
+        return False
+
+
 def _preprocess_frame(df, fs, baseline_end, apply_time_window, start_time, end_time):
     df = df.copy()
     df["trace"] = process_trace_column(df["trace"])
     df["trace"] = baseline_correction(df["trace"], fs, baseline_end)
     if apply_time_window:
         df["trace"] = time_windowing(df["trace"], fs, start_time, end_time)
+        min_len = int((end_time - start_time) * fs)
+        df = df[df["trace"].apply(lambda x: _has_min_len(x, min_len))].reset_index(drop=True)
     return df
 
 
@@ -64,7 +73,7 @@ def compute_spectrogram_stats(
     input_paths: Iterable[str],
     fs: int = 1000,
     baseline_end: float = 2.0,
-    apply_time_window: bool = False,
+    apply_time_window: bool = True,
     start_time: float = 0.0,
     end_time: float = 5.0,
     batch_size: int = 2048,
@@ -120,7 +129,7 @@ def preprocess_parquet_to_gcs(
     output_path: str,
     fs: int = 1000,
     baseline_end: float = 2.0,
-    apply_time_window: bool = False,
+    apply_time_window: bool = True,
     start_time: float = 0.0,
     end_time: float = 5.0,
     batch_size: int = 2048,
@@ -227,7 +236,7 @@ def preprocess_splits_to_gcs(
     test_output: str,
     fs: int = 1000,
     baseline_end: float = 2.0,
-    apply_time_window: bool = False,
+    apply_time_window: bool = True,
     start_time: float = 0.0,
     end_time: float = 5.0,
     batch_size: int = 2048,
@@ -315,7 +324,9 @@ def main():
         test_output,
         fs=1000,
         baseline_end=2.0,
-        apply_time_window=False,
+        apply_time_window=True,
+        start_time=0.0,
+        end_time=5.0,
         stats_output_path=stats_output,
         spectrogram_config={
             "fs": 1000,
