@@ -35,6 +35,6 @@ class TrainConfig:
     n_heads: Optional[int] = None
     n_layers: Optional[int] = None
     mlp_ratio: Optional[float] = None
-    dropout: float = 0.1
+    dropout: float = 0.2
     attention_dropout: float = 0.1
     drop_path: float = 0.1

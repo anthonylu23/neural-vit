@@ -1,3 +1,4 @@
+from collections import Counter
 from dataclasses import asdict
 from pathlib import Path
 
@@ -36,12 +37,13 @@ def build_model(cfg, freq_size, time_size):
     return Temporal3DViT(config)
 
 
-def evaluate(model, loader, device):
+def evaluate(model, loader, device, criterion=None):
     model.eval()
     total = 0
     correct = 0
     total_loss = 0.0
-    criterion = torch.nn.CrossEntropyLoss()
+    if criterion is None:
+        criterion = torch.nn.CrossEntropyLoss()
     all_probs = []
     all_labels = []
     with torch.no_grad():
@@ -98,13 +100,14 @@ def train(cfg: TrainConfig):
     print(f"Validation dataset ready. Sequences: {len(val_ds)}")
     print(f"Test dataset ready. Sequences: {len(test_ds)}")
 
+    device = torch.device(cfg.device)
+
     if cfg.freq_size and cfg.time_size:
         freq_size, time_size = cfg.freq_size, cfg.time_size
     else:
         freq_size, time_size = infer_input_dims(train_ds)
 
     model = build_model(cfg, freq_size, time_size)
-    device = torch.device(cfg.device)
     model.to(device)
 
     optimizer = torch.optim.AdamW(
@@ -112,7 +115,17 @@ def train(cfg: TrainConfig):
         lr=cfg.lr,
         weight_decay=cfg.weight_decay
     )
-    criterion = torch.nn.CrossEntropyLoss()
+    label_counts = Counter(train_ds.sequence_labels)
+    num_classes = max(label_counts.keys(), default=-1) + 1
+    if num_classes <= 0:
+        raise ValueError("Training dataset has no labels.")
+    counts = torch.tensor(
+        [label_counts.get(i, 0) for i in range(num_classes)],
+        dtype=torch.float32,
+    )
+    weights = counts.sum() / (counts * num_classes)
+    weights = torch.where(counts > 0, weights, torch.zeros_like(weights))
+    criterion = torch.nn.CrossEntropyLoss(weight=weights.to(device))
 
     best_val_acc = 0.0
     output_dir = Path(cfg.output_dir) if cfg.output_dir else None
@@ -143,7 +156,7 @@ def train(cfg: TrainConfig):
         train_loss = running_loss / max(total, 1)
         train_acc = correct / max(total, 1)
 
-        val_loss, val_acc, val_auc = evaluate(model, val_loader, device)
+        val_loss, val_acc, val_auc = evaluate(model, val_loader, device, criterion)
         print(
             f"Epoch {epoch}/{cfg.epochs} | "
             f"train loss {train_loss:.4f}, acc {train_acc:.4f} | "
@@ -158,7 +171,7 @@ def train(cfg: TrainConfig):
             }
             torch.save(ckpt, output_dir / "best.pt")
 
-    test_loss, test_acc, test_auc = evaluate(model, test_loader, device)
+    test_loss, test_acc, test_auc = evaluate(model, test_loader, device, criterion)
     print(f"Test loss {test_loss:.4f}, acc {test_acc:.4f}, auc {test_auc:.4f}")
 
     if output_dir:
