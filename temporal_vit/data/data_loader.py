@@ -71,6 +71,8 @@ def _open_dataset(paths: Iterable[str]) -> ds.Dataset:
 def _to_numpy_spec(value) -> np.ndarray:
     if value is None:
         return np.array([], dtype=np.float32)
+    if isinstance(value, np.ndarray) and value.dtype == object:
+        value = value.tolist()
     arr = np.asarray(value, dtype=np.float32)
     return arr
 
