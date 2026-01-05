@@ -20,6 +20,11 @@ def build_run_id(prefix: str = "temporal-vit") -> str:
     return f"{prefix}-{timestamp}"
 
 
+def _build_metrics_filename() -> str:
+    timestamp = datetime.utcnow().strftime("%Y%m%d-%H%M%S")
+    return f"metrics_{timestamp}_{os.getpid()}.jsonl"
+
+
 def _resolve_project(project_id: Optional[str]) -> Optional[str]:
     return project_id or os.environ.get("AIP_PROJECT_ID") or os.environ.get("GOOGLE_CLOUD_PROJECT")
 
@@ -39,6 +44,12 @@ def _resolve_tb_log_dir(run_id: str, output_dir: Optional[str]) -> str:
     if output_dir and not output_dir.startswith("gs://"):
         return os.path.join(output_dir, "tb")
     return os.path.join("runs", run_id)
+
+
+def _resolve_metrics_dir(run_id: str, output_dir: Optional[str]) -> str:
+    if output_dir and not output_dir.startswith("gs://"):
+        return os.path.join(output_dir, run_id, "metrics")
+    return os.path.join("runs", run_id, "metrics")
 
 
 def _coerce_param_value(value: Any) -> Optional[object]:
@@ -66,12 +77,21 @@ class ExperimentLogger:
         self.run_id = run_id
         self._vertex_active = False
         self._writer = None
+        self._metrics_path = None
+        self._metrics_gcs_path = None
 
         if enable_tensorboard and SummaryWriter is not None:
             log_dir = _resolve_tb_log_dir(run_id, output_dir)
             if not log_dir.startswith("gs://"):
                 os.makedirs(log_dir, exist_ok=True)
             self._writer = SummaryWriter(log_dir)
+
+        metrics_dir = _resolve_metrics_dir(run_id, output_dir)
+        os.makedirs(metrics_dir, exist_ok=True)
+        metrics_filename = _build_metrics_filename()
+        self._metrics_path = os.path.join(metrics_dir, metrics_filename)
+        if output_dir and output_dir.startswith("gs://"):
+            self._metrics_gcs_path = f"{output_dir.rstrip('/')}/{run_id}/metrics/{metrics_filename}"
 
         if enable_vertex and aiplatform is not None:
             project = _resolve_project(project_id)
@@ -101,11 +121,25 @@ class ExperimentLogger:
         if self._writer is not None:
             for name, value in metrics.items():
                 self._writer.add_scalar(name, value, global_step=step)
+        if self._metrics_path is not None:
+            record = {"step": step}
+            record.update(metrics)
+            with open(self._metrics_path, "a", encoding="utf-8") as handle:
+                handle.write(json.dumps(record))
+                handle.write("\n")
 
     def close(self) -> None:
         if self._writer is not None:
             self._writer.flush()
             self._writer.close()
+        if self._metrics_gcs_path and self._metrics_path and os.path.exists(self._metrics_path):
+            try:
+                import gcsfs
+
+                fs = gcsfs.GCSFileSystem()
+                fs.put(self._metrics_path, self._metrics_gcs_path)
+            except Exception:
+                pass
         if self._vertex_active:
             aiplatform.end_run()
 
