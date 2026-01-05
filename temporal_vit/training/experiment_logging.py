@@ -35,7 +35,7 @@ def _resolve_tb_log_dir(run_id: str, output_dir: Optional[str]) -> str:
     base = os.environ.get("AIP_TENSORBOARD_LOG_DIR")
     if base:
         return os.path.join(base, run_id)
-    if output_dir:
+    if output_dir and not output_dir.startswith("gs://"):
         return os.path.join(output_dir, "tb")
     return os.path.join("runs", run_id)
 
@@ -58,7 +58,8 @@ class ExperimentLogger:
 
         if enable_tensorboard and SummaryWriter is not None:
             log_dir = _resolve_tb_log_dir(run_id, output_dir)
-            os.makedirs(log_dir, exist_ok=True)
+            if not log_dir.startswith("gs://"):
+                os.makedirs(log_dir, exist_ok=True)
             self._writer = SummaryWriter(log_dir)
 
         if enable_vertex and aiplatform is not None:

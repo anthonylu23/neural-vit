@@ -1,4 +1,5 @@
 from collections import Counter
+import os
 from dataclasses import asdict
 from pathlib import Path
 
@@ -16,6 +17,27 @@ from temporal_vit.training.experiment_logging import (
     build_run_id,
     log_config,
 )
+
+
+def _is_gcs_path(path: str) -> bool:
+    return path.startswith("gs://")
+
+
+def _checkpoint_path(output_dir: str, name: str) -> str:
+    if output_dir.endswith("/"):
+        return f"{output_dir}{name}"
+    return f"{output_dir}/{name}"
+
+
+def _save_checkpoint(ckpt: dict, path: str) -> None:
+    if _is_gcs_path(path):
+        import gcsfs
+
+        fs = gcsfs.GCSFileSystem()
+        with fs.open(path, "wb") as handle:
+            torch.save(ckpt, handle)
+    else:
+        torch.save(ckpt, path)
 
 
 def infer_input_dims(dataset: ParquetSequenceDataset):
@@ -143,14 +165,20 @@ def train(cfg: TrainConfig):
     )
 
     best_val_acc = 0.0
-    output_dir = Path(cfg.output_dir) if cfg.output_dir else None
-    if output_dir:
-        output_dir.mkdir(parents=True, exist_ok=True)
+    output_dir = (
+        cfg.output_dir
+        or os.environ.get("AIP_MODEL_DIR")
+        or os.environ.get("AIP_CHECKPOINT_DIR")
+    )
+    output_dir_path = None
+    if output_dir and not _is_gcs_path(output_dir):
+        output_dir_path = Path(output_dir)
+        output_dir_path.mkdir(parents=True, exist_ok=True)
 
     run_id = cfg.run_name or build_run_id()
     logger = ExperimentLogger(
         run_id=run_id,
-        output_dir=str(output_dir) if output_dir else None,
+        output_dir=output_dir,
         project_id=cfg.project_id,
         location=cfg.location,
         experiment_name=cfg.experiment_name,
@@ -224,7 +252,7 @@ def train(cfg: TrainConfig):
                     "model_state": model.state_dict(),
                     "config": asdict(model.config),
                 }
-                torch.save(ckpt, output_dir / "best.pt")
+                _save_checkpoint(ckpt, _checkpoint_path(output_dir, "best.pt"))
 
         test_loss, test_acc, test_auc = evaluate(model, test_loader, device, criterion)
         logger.log_metrics(
@@ -244,19 +272,20 @@ def train(cfg: TrainConfig):
             "model_state": model.state_dict(),
             "config": asdict(model.config),
         }
-        torch.save(ckpt, output_dir / "last.pt")
+        _save_checkpoint(ckpt, _checkpoint_path(output_dir, "last.pt"))
 
 
 def main():
     bucket_name = "lfp_spec_datasets"
     prefix = "neural/v1"
+    output_dir = os.environ.get("AIP_MODEL_DIR") or os.environ.get("AIP_CHECKPOINT_DIR") or "runs/run1"
     config = TrainConfig(
         train_paths=[f"gs://{bucket_name}/{prefix}/train_preprocessed.parquet"],
         val_paths=[f"gs://{bucket_name}/{prefix}/val_preprocessed.parquet"],
         test_paths=[f"gs://{bucket_name}/{prefix}/test_preprocessed.parquet"],
         use_preprocessed=True,
         stats_path=None,
-        output_dir="runs/run1",
+        output_dir=output_dir,
     )
     train(config)
 
