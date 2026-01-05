@@ -5,10 +5,17 @@ from pathlib import Path
 import torch
 from sklearn.metrics import roc_auc_score
 
-from temporal_vit.data.data_loader import build_parquet_dataloaders, ParquetSequenceDataset
-from temporal_vit.models.model import Temporal3DViT, Temporal3DViTConfig, CONFIGS
+from temporal_vit.data.data_loader import (
+    ParquetSequenceDataset,
+    build_parquet_dataloaders,
+)
+from temporal_vit.models.model import CONFIGS, Temporal3DViT, Temporal3DViTConfig
 from temporal_vit.training.config import TrainConfig
-from temporal_vit.training.experiment_logging import ExperimentLogger, build_run_id, log_config
+from temporal_vit.training.experiment_logging import (
+    ExperimentLogger,
+    build_run_id,
+    log_config,
+)
 
 
 def infer_input_dims(dataset: ParquetSequenceDataset):
@@ -19,21 +26,23 @@ def infer_input_dims(dataset: ParquetSequenceDataset):
 def build_model(cfg, freq_size, time_size):
     base_config = CONFIGS[cfg.model_size]
     config_dict = asdict(base_config)
-    config_dict.update({
-        "n_trials": cfg.n_trials,
-        "freq_size": freq_size,
-        "time_size": time_size,
-        "patch_trial": cfg.patch_trial or base_config.patch_trial,
-        "patch_freq": cfg.patch_freq or base_config.patch_freq,
-        "patch_time": cfg.patch_time or base_config.patch_time,
-        "embed_dim": cfg.embed_dim or base_config.embed_dim,
-        "n_heads": cfg.n_heads or base_config.n_heads,
-        "n_layers": cfg.n_layers or base_config.n_layers,
-        "mlp_ratio": cfg.mlp_ratio or base_config.mlp_ratio,
-        "dropout": cfg.dropout,
-        "attention_dropout": cfg.attention_dropout,
-        "drop_path": cfg.drop_path,
-    })
+    config_dict.update(
+        {
+            "n_trials": cfg.n_trials,
+            "freq_size": freq_size,
+            "time_size": time_size,
+            "patch_trial": cfg.patch_trial or base_config.patch_trial,
+            "patch_freq": cfg.patch_freq or base_config.patch_freq,
+            "patch_time": cfg.patch_time or base_config.patch_time,
+            "embed_dim": cfg.embed_dim or base_config.embed_dim,
+            "n_heads": cfg.n_heads or base_config.n_heads,
+            "n_layers": cfg.n_layers or base_config.n_layers,
+            "mlp_ratio": cfg.mlp_ratio or base_config.mlp_ratio,
+            "dropout": cfg.dropout,
+            "attention_dropout": cfg.attention_dropout,
+            "drop_path": cfg.drop_path,
+        }
+    )
     config = Temporal3DViTConfig(**config_dict)
     return Temporal3DViT(config)
 
@@ -79,7 +88,9 @@ def train(cfg: TrainConfig):
         print("GPU not available, running on CPU.")
 
     if not cfg.use_preprocessed:
-        raise ValueError("Training expects preprocessed spectrograms. Set use_preprocessed=True.")
+        raise ValueError(
+            "Training expects preprocessed spectrograms. Set use_preprocessed=True."
+        )
     spectrogram_column = cfg.spectrogram_column
     if not spectrogram_column:
         raise ValueError("spectrogram_column must be set for preprocessed datasets.")
@@ -87,15 +98,17 @@ def train(cfg: TrainConfig):
         print("Using preprocessed spectrograms; stats_path will be ignored.")
 
     print("Initializing training/validation/test datasets...")
-    train_loader, val_loader, test_loader, (train_ds, val_ds, test_ds) = build_parquet_dataloaders(
-        train_paths=cfg.train_paths,
-        val_paths=cfg.val_paths,
-        test_paths=cfg.test_paths,
-        n_trials=cfg.n_trials,
-        stride=cfg.stride,
-        spectrogram_column=spectrogram_column,
-        loader_cfg=cfg.loader,
-        device=cfg.device,
+    train_loader, val_loader, test_loader, (train_ds, val_ds, test_ds) = (
+        build_parquet_dataloaders(
+            train_paths=cfg.train_paths,
+            val_paths=cfg.val_paths,
+            test_paths=cfg.test_paths,
+            n_trials=cfg.n_trials,
+            stride=cfg.stride,
+            spectrogram_column=spectrogram_column,
+            loader_cfg=cfg.loader,
+            device=cfg.device,
+        )
     )
     print(f"Training dataset ready. Sequences: {len(train_ds)}")
     print(f"Validation dataset ready. Sequences: {len(val_ds)}")
@@ -112,9 +125,7 @@ def train(cfg: TrainConfig):
     model.to(device)
 
     optimizer = torch.optim.AdamW(
-        model.parameters(),
-        lr=cfg.lr,
-        weight_decay=cfg.weight_decay
+        model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay
     )
     label_counts = Counter(train_ds.sequence_labels)
     num_classes = max(label_counts.keys(), default=-1) + 1
@@ -145,13 +156,15 @@ def train(cfg: TrainConfig):
         experiment_name=cfg.experiment_name,
     )
     log_config(logger, cfg)
-    logger.log_params({
-        "train_sequences": len(train_ds),
-        "val_sequences": len(val_ds),
-        "test_sequences": len(test_ds),
-        "class_0_count": int(label_counts.get(0, 0)),
-        "class_1_count": int(label_counts.get(1, 0)),
-    })
+    logger.log_params(
+        {
+            "train_sequences": len(train_ds),
+            "val_sequences": len(val_ds),
+            "test_sequences": len(test_ds),
+            "class_0_count": int(label_counts.get(0, 0)),
+            "class_1_count": int(label_counts.get(1, 0)),
+        }
+    )
 
     try:
         for epoch in range(1, cfg.epochs + 1):
@@ -188,14 +201,17 @@ def train(cfg: TrainConfig):
                 train_auc = float("nan")
 
             val_loss, val_acc, val_auc = evaluate(model, val_loader, device, criterion)
-            logger.log_metrics({
-                "train/loss": train_loss,
-                "train/acc": train_acc,
-                "train/auc": train_auc,
-                "val/loss": val_loss,
-                "val/acc": val_acc,
-                "val/auc": val_auc,
-            }, step=epoch)
+            logger.log_metrics(
+                {
+                    "train/loss": train_loss,
+                    "train/acc": train_acc,
+                    "train/auc": train_auc,
+                    "val/loss": val_loss,
+                    "val/acc": val_acc,
+                    "val/auc": val_auc,
+                },
+                step=epoch,
+            )
             print(
                 f"Epoch {epoch}/{cfg.epochs} | "
                 f"train loss {train_loss:.4f}, acc {train_acc:.4f}, auc {train_auc:.4f} | "
@@ -211,11 +227,14 @@ def train(cfg: TrainConfig):
                 torch.save(ckpt, output_dir / "best.pt")
 
         test_loss, test_acc, test_auc = evaluate(model, test_loader, device, criterion)
-        logger.log_metrics({
-            "test/loss": test_loss,
-            "test/acc": test_acc,
-            "test/auc": test_auc,
-        }, step=cfg.epochs + 1)
+        logger.log_metrics(
+            {
+                "test/loss": test_loss,
+                "test/acc": test_acc,
+                "test/auc": test_auc,
+            },
+            step=cfg.epochs + 1,
+        )
         print(f"Test loss {test_loss:.4f}, acc {test_acc:.4f}, auc {test_auc:.4f}")
     finally:
         logger.close()
