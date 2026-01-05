@@ -22,6 +22,10 @@ class TrainConfig:
     weight_decay: float = 0.01
     label_smoothing: float = 0.05
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
+    experiment_name: Optional[str] = None
+    run_name: Optional[str] = None
+    project_id: Optional[str] = None
+    location: Optional[str] = None
 
     n_trials: int = 8
     stride: int = 4

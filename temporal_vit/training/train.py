@@ -8,6 +8,7 @@ from sklearn.metrics import roc_auc_score
 from temporal_vit.data.data_loader import build_parquet_dataloaders, ParquetSequenceDataset
 from temporal_vit.models.model import Temporal3DViT, Temporal3DViTConfig, CONFIGS
 from temporal_vit.training.config import TrainConfig
+from temporal_vit.training.experiment_logging import ExperimentLogger, build_run_id, log_config
 
 
 def infer_input_dims(dataset: ParquetSequenceDataset):
@@ -135,56 +136,89 @@ def train(cfg: TrainConfig):
     if output_dir:
         output_dir.mkdir(parents=True, exist_ok=True)
 
-    for epoch in range(1, cfg.epochs + 1):
-        model.train()
-        running_loss = 0.0
-        correct = 0
-        total = 0
-        train_probs = []
-        train_labels = []
+    run_id = cfg.run_name or build_run_id()
+    logger = ExperimentLogger(
+        run_id=run_id,
+        output_dir=str(output_dir) if output_dir else None,
+        project_id=cfg.project_id,
+        location=cfg.location,
+        experiment_name=cfg.experiment_name,
+    )
+    log_config(logger, cfg)
+    logger.log_params({
+        "train_sequences": len(train_ds),
+        "val_sequences": len(val_ds),
+        "test_sequences": len(test_ds),
+        "class_0_count": int(label_counts.get(0, 0)),
+        "class_1_count": int(label_counts.get(1, 0)),
+    })
 
-        for specs, labels in train_loader:
-            specs = specs.to(device, non_blocking=True)
-            labels = labels.to(device, non_blocking=True)
+    try:
+        for epoch in range(1, cfg.epochs + 1):
+            model.train()
+            running_loss = 0.0
+            correct = 0
+            total = 0
+            train_probs = []
+            train_labels = []
 
-            optimizer.zero_grad()
-            logits = model(specs)
-            loss = criterion(logits, labels)
-            loss.backward()
-            optimizer.step()
+            for specs, labels in train_loader:
+                specs = specs.to(device, non_blocking=True)
+                labels = labels.to(device, non_blocking=True)
 
-            running_loss += loss.item() * labels.size(0)
-            preds = torch.argmax(logits, dim=1)
-            correct += (preds == labels).sum().item()
-            total += labels.size(0)
-            probs = torch.softmax(logits.detach(), dim=1)[:, 1].cpu().numpy()
-            train_probs.extend(probs.tolist())
-            train_labels.extend(labels.detach().cpu().numpy().tolist())
+                optimizer.zero_grad()
+                logits = model(specs)
+                loss = criterion(logits, labels)
+                loss.backward()
+                optimizer.step()
 
-        train_loss = running_loss / max(total, 1)
-        train_acc = correct / max(total, 1)
-        try:
-            train_auc = roc_auc_score(train_labels, train_probs)
-        except ValueError:
-            train_auc = float("nan")
+                running_loss += loss.item() * labels.size(0)
+                preds = torch.argmax(logits, dim=1)
+                correct += (preds == labels).sum().item()
+                total += labels.size(0)
+                probs = torch.softmax(logits.detach(), dim=1)[:, 1].cpu().numpy()
+                train_probs.extend(probs.tolist())
+                train_labels.extend(labels.detach().cpu().numpy().tolist())
 
-        val_loss, val_acc, val_auc = evaluate(model, val_loader, device, criterion)
-        print(
-            f"Epoch {epoch}/{cfg.epochs} | "
-            f"train loss {train_loss:.4f}, acc {train_acc:.4f}, auc {train_auc:.4f} | "
-            f"val loss {val_loss:.4f}, acc {val_acc:.4f}, auc {val_auc:.4f}"
-        )
+            train_loss = running_loss / max(total, 1)
+            train_acc = correct / max(total, 1)
+            try:
+                train_auc = roc_auc_score(train_labels, train_probs)
+            except ValueError:
+                train_auc = float("nan")
 
-        if output_dir and val_acc > best_val_acc:
-            best_val_acc = val_acc
-            ckpt = {
-                "model_state": model.state_dict(),
-                "config": asdict(model.config),
-            }
-            torch.save(ckpt, output_dir / "best.pt")
+            val_loss, val_acc, val_auc = evaluate(model, val_loader, device, criterion)
+            logger.log_metrics({
+                "train/loss": train_loss,
+                "train/acc": train_acc,
+                "train/auc": train_auc,
+                "val/loss": val_loss,
+                "val/acc": val_acc,
+                "val/auc": val_auc,
+            }, step=epoch)
+            print(
+                f"Epoch {epoch}/{cfg.epochs} | "
+                f"train loss {train_loss:.4f}, acc {train_acc:.4f}, auc {train_auc:.4f} | "
+                f"val loss {val_loss:.4f}, acc {val_acc:.4f}, auc {val_auc:.4f}"
+            )
 
-    test_loss, test_acc, test_auc = evaluate(model, test_loader, device, criterion)
-    print(f"Test loss {test_loss:.4f}, acc {test_acc:.4f}, auc {test_auc:.4f}")
+            if output_dir and val_acc > best_val_acc:
+                best_val_acc = val_acc
+                ckpt = {
+                    "model_state": model.state_dict(),
+                    "config": asdict(model.config),
+                }
+                torch.save(ckpt, output_dir / "best.pt")
+
+        test_loss, test_acc, test_auc = evaluate(model, test_loader, device, criterion)
+        logger.log_metrics({
+            "test/loss": test_loss,
+            "test/acc": test_acc,
+            "test/auc": test_auc,
+        }, step=cfg.epochs + 1)
+        print(f"Test loss {test_loss:.4f}, acc {test_acc:.4f}, auc {test_auc:.4f}")
+    finally:
+        logger.close()
 
     if output_dir:
         ckpt = {
