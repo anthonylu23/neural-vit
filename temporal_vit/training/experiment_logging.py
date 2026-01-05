@@ -1,3 +1,4 @@
+import json
 import os
 from dataclasses import asdict
 from datetime import datetime
@@ -40,6 +41,16 @@ def _resolve_tb_log_dir(run_id: str, output_dir: Optional[str]) -> str:
     return os.path.join("runs", run_id)
 
 
+def _coerce_param_value(value: Any) -> Optional[object]:
+    if value is None:
+        return None
+    if isinstance(value, (str, int, float)):
+        return value
+    if isinstance(value, (list, tuple, set, dict)):
+        return json.dumps(value, default=str)
+    return str(value)
+
+
 class ExperimentLogger:
     def __init__(
         self,
@@ -73,11 +84,20 @@ class ExperimentLogger:
 
     def log_params(self, params: Dict[str, Any]) -> None:
         if self._vertex_active:
-            aiplatform.log_params(params)
+            sanitized: Dict[str, object] = {}
+            for key, value in params.items():
+                coerced = _coerce_param_value(value)
+                if coerced is not None:
+                    sanitized[key] = coerced
+            if sanitized:
+                aiplatform.log_params(sanitized)
 
     def log_metrics(self, metrics: Dict[str, float], step: Optional[int] = None) -> None:
         if self._vertex_active:
-            aiplatform.log_metrics(metrics, step=step)
+            try:
+                aiplatform.log_metrics(metrics, step=step)
+            except TypeError:
+                aiplatform.log_metrics(metrics)
         if self._writer is not None:
             for name, value in metrics.items():
                 self._writer.add_scalar(name, value, global_step=step)

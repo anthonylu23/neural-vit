@@ -29,6 +29,11 @@ def _checkpoint_path(output_dir: str, name: str) -> str:
     return f"{output_dir}/{name}"
 
 
+def _checkpoint_dir(base_dir: str, run_id: str) -> str:
+    base = base_dir.rstrip("/")
+    return f"{base}/{run_id}/checkpoints"
+
+
 def _save_checkpoint(ckpt: dict, path: str) -> None:
     if _is_gcs_path(path):
         import gcsfs
@@ -170,12 +175,12 @@ def train(cfg: TrainConfig):
         or os.environ.get("AIP_MODEL_DIR")
         or os.environ.get("AIP_CHECKPOINT_DIR")
     )
-    output_dir_path = None
-    if output_dir and not _is_gcs_path(output_dir):
-        output_dir_path = Path(output_dir)
-        output_dir_path.mkdir(parents=True, exist_ok=True)
-
     run_id = cfg.run_name or build_run_id()
+    checkpoint_dir = None
+    if output_dir:
+        checkpoint_dir = _checkpoint_dir(output_dir, run_id)
+        if not _is_gcs_path(checkpoint_dir):
+            Path(checkpoint_dir).mkdir(parents=True, exist_ok=True)
     logger = ExperimentLogger(
         run_id=run_id,
         output_dir=output_dir,
@@ -246,13 +251,15 @@ def train(cfg: TrainConfig):
                 f"val loss {val_loss:.4f}, acc {val_acc:.4f}, auc {val_auc:.4f}"
             )
 
-            if output_dir and val_acc > best_val_acc:
+            if checkpoint_dir and val_acc > best_val_acc:
                 best_val_acc = val_acc
                 ckpt = {
                     "model_state": model.state_dict(),
                     "config": asdict(model.config),
                 }
-                _save_checkpoint(ckpt, _checkpoint_path(output_dir, "best.pt"))
+                _save_checkpoint(
+                    ckpt, _checkpoint_path(checkpoint_dir, f"best_epoch_{epoch}.pt")
+                )
 
         test_loss, test_acc, test_auc = evaluate(model, test_loader, device, criterion)
         logger.log_metrics(
@@ -267,12 +274,12 @@ def train(cfg: TrainConfig):
     finally:
         logger.close()
 
-    if output_dir:
+    if checkpoint_dir:
         ckpt = {
             "model_state": model.state_dict(),
             "config": asdict(model.config),
         }
-        _save_checkpoint(ckpt, _checkpoint_path(output_dir, "last.pt"))
+        _save_checkpoint(ckpt, _checkpoint_path(checkpoint_dir, "final.pt"))
 
 
 def main():
