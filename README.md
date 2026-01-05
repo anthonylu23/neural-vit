@@ -1,39 +1,22 @@
 # Temporal 3D Neural ViT
 
-Temporal 3D Vision Transformer for Multi-Trial LFP (Local Field Potential) Analysis to classify WT vs FMR1 knockout mice.
+Temporal 3D Vision Transformer for multi-trial LFP (Local Field Potential) spectrogram sequences, built to classify WT vs FMR1 knockout mice and capture trial-to-trial dynamics.
 
-## 🚀 Quick Start
+## Project Summary
 
-1. **Get Data**: Pull sample data from BigQuery.
-   ```bash
-   python -m temporal_vit.cloud.get_data
-   ```
-2. **Preprocess**: Parse traces and generate trial sequences (spectrograms computed on-the-fly).
-   ```bash
-   python -m temporal_vit.data.preprocessing_local
-   ```
-3. **Analyze**: Explore sequences in the notebook.
-   ```bash
-   jupyter notebook notebooks/eda.ipynb
-   ```
+This project models sequences of LFP trials as a 3D token volume (trial x frequency x time) and trains a Temporal 3D ViT to learn cross-trial patterns that single-trial models miss. The data originates in BigQuery, is exported to GCS, preprocessed into normalized spectrogram parquets, and trained on Vertex AI with experiment tracking.
 
-## 📂 Project Structure
+## Pipeline Overview
 
-- `temporal_vit/cloud/get_data.py`: BigQuery extraction and stratified sampling.
-- `temporal_vit/data/preprocessing_local.py`: Baseline correction, windowing, and 3D sequence generation from raw traces.
-- `temporal_vit/data/gcs_dataset.py`: Streaming dataset for GCS/local parquet with on-the-fly spectrograms.
-- `temporal_vit/data/data_loader.py`: Normalization utilities and local dataloader helpers.
-- `temporal_vit/data/data_audit.py`: Dataset inventory and quality control reporting.
-- `temporal_vit/local/`: Local experiments and pipeline checks.
-- `temporal_vit/cloud/`: Cloud/Vertex utilities (BigQuery, GCS export).
-- `notebooks/eda.ipynb`: Exploratory data analysis and visualization.
-- `data/`: Local parquet samples and generated sequence artifacts.
-- `project_plan.md`: Detailed architecture and infrastructure roadmap.
-- `checklist.md`: Feature tracking and implementation status.
+- Raw LFP traces live in BigQuery and are exported to GCS as train/val/test splits.
+- `preprocess_to_gcs.py` computes spectrograms, applies train-set normalization, and writes preprocessed parquets plus normalization stats.
+- `data_loader.py` builds PyTorch datasets/dataloaders directly from preprocessed parquets.
+- Training runs on Vertex AI with GPU support, checkpointing to GCS, and metrics logged to Vertex Experiments + TensorBoard.
 
-## 🛠 Tech Stack
+## Repo Highlights
 
-- **Core**: Python, PyTorch
-- **Data**: Google BigQuery, Pandas, Parquet
-- **Signal**: SciPy (Spectrograms)
-- **Infrastructure**: Vertex AI / GCS
+- `temporal_vit/models/`: Temporal 3D ViT architecture and configs.
+- `temporal_vit/data/`: preprocessing, dataloaders, and data audit utilities.
+- `temporal_vit/training/`: training loop, config, and experiment logging.
+- `temporal_vit/cloud/`: BigQuery/GCS export helpers.
+- `notebooks/eda.ipynb`: EDA and data quality checks.

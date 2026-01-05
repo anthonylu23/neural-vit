@@ -10,7 +10,7 @@
 
 **Dataset**: Mouse auditory cortex LFP from `lab6/8` (WT vs FMR1, ~32 sessions, ~77k trials)
 
-**Status**: Phase 1 (Data Prep) Complete. Moving to Cloud Migration & Model Training.
+**Status**: Phase 2 (Cloud Training) Active. Preprocessed spectrogram parquets are in GCS and Vertex training runs are live with experiment logging.
 
 ---
 
@@ -22,14 +22,19 @@
 
 ```
 ┌─────────────┐     ┌─────────────────────┐     ┌─────────────────────┐
-│  BigQuery   │────▶│    GCS (Raw)        │────▶│  Vertex AI Training │
-│ (raw data)  │     │ (train/val/test)    │     │ (Lazy Loading)      │
-└─────────────┘     └──────────┬──────────┘     └─────────────────────┘
-                               │
-                       ┌───────▼────────┐
-                       │ stats.json     │
-                       │ (spec stats)   │
-                       └────────────────┘
+│  BigQuery   │────▶│    GCS (Raw)        │────▶│ Preprocess to GCS    │
+│ (raw data)  │     │ (train/val/test)    │     │ (spectrograms)      │
+└─────────────┘     └──────────┬──────────┘     └──────────┬──────────┘
+                               │                           │
+                               │                   ┌───────▼────────┐
+                               │                   │ spectrogram    │
+                               │                   │ norm stats     │
+                               │                   └───────┬────────┘
+                               │                           │
+                       ┌───────▼────────┐          ┌───────▼────────┐
+                       │ GCS (Preproc)  │────────▶│ Vertex Training │
+                       │ train/val/test │          │ + Experiments   │
+                       └────────────────┘          └────────────────┘
 ```
 
 ---
@@ -41,23 +46,27 @@
 | **Data Inventory** | ✅ | `temporal_vit/data/data_audit.py` reports dataset stats. |
 | **Preprocessing Logic** | ✅ | `temporal_vit/data/preprocessing_local.py` verified (Baseline -> Window). |
 | **Local Pipeline** | ✅ | `temporal_vit/local/test_pipeline.py` verifies end-to-end flow. |
-| **Normalization** | ✅ | Global normalization implemented (data loader + training). |
+| **Normalization** | ✅ | Spectrogram normalization computed in `preprocess_to_gcs.py` (train-only stats). |
 
 ---
 
 ## Phase 2: Cloud Migration & Pipeline (Current Focus)
 
 ### Step 1: GCS Setup (once)
-- [ ] **Bucket**: Create GCS bucket for data and outputs.
-- [ ] **Permissions**: Vertex service account needs BigQuery read + GCS write.
+- [x] **Buckets**:
+  - `gs://lfp_spec_datasets` for raw + preprocessed data
+  - `gs://lfp-temporal-vit` for outputs (checkpoints, logs)
+- [x] **Permissions**: Vertex service account `vertex-runner@lfp-temporal-vit.iam.gserviceaccount.com` has
+  - `storage.objects.get` on `gs://lfp_spec_datasets`
+  - `storage.objects.create` on `gs://lfp-temporal-vit`
 
 ### Step 2: Export Full Dataset → GCS (`temporal_vit/cloud/export_to_gcs.py`)
-- [ ] **Query BigQuery**: Fetch full raw traces.
-- [ ] **Split**: Use `create_session_splits_df` to get train/val/test by session.
-- [ ] **Upload**:
-  - `gs://.../v1/train.parquet`
-  - `gs://.../v1/val.parquet`
-  - `gs://.../v1/test.parquet`
+- [x] **Query BigQuery**: Fetch full raw traces.
+- [x] **Split**: Use `create_session_splits_df` to get train/val/test by session.
+- [x] **Upload**:
+  - `gs://lfp_spec_datasets/neural/v1/train.parquet`
+  - `gs://lfp_spec_datasets/neural/v1/val.parquet`
+  - `gs://lfp_spec_datasets/neural/v1/test.parquet`
 
 **Brief run (Vertex/Workbench):**
 ```python
@@ -65,26 +74,27 @@ from temporal_vit.cloud.export_to_gcs import export_full_dataset_to_gcs
 export_full_dataset_to_gcs(project_id, dataset_id, table_id, bucket_name, prefix="neural/v1")
 ```
 
-### Step 3: Preprocess + Spectrogram Normalization (Optional)
+### Step 3: Preprocess + Spectrogram Normalization (Current Path)
 - [x] **Script**: `temporal_vit/data/preprocess_to_gcs.py`
 - [x] **Train Only Stats**: Compute global spectrogram mean/std from train.
 - [x] **Write Outputs**:
-  - `gs://.../v1/train_preprocessed.parquet`
-  - `gs://.../v1/val_preprocessed.parquet`
-  - `gs://.../v1/test_preprocessed.parquet`
-  - `gs://.../v1/trace_norm_stats.json` (spectrogram stats)
+  - `gs://lfp_spec_datasets/neural/v1/train_preprocessed.parquet`
+  - `gs://lfp_spec_datasets/neural/v1/val_preprocessed.parquet`
+  - `gs://lfp_spec_datasets/neural/v1/test_preprocessed.parquet`
+  - `gs://lfp_spec_datasets/neural/v1/spectrogram_norm_stats.json`
 
-### Step 4: Cloud Dataset (`temporal_vit/data/gcs_dataset.py`)
-- [x] **Streaming**: Metadata-only index; traces loaded per row group.
-- [x] **On-the-fly Specs**: Baseline → spectrogram in `__getitem__`.
-- [x] **GCS Paths**: Accepts `gs://...` and normalizes for PyArrow.
-- [ ] **Normalization**: Apply stats via `transform` (not inside dataset).
+### Step 4: Data Loader (Preprocessed Parquets)
+- [x] **Dataset**: `ParquetSequenceDataset` in `temporal_vit/data/data_loader.py`.
+- [x] **Input**: Preprocessed parquets with `spectrogram` column.
+- [x] **Loader**: `build_parquet_dataloaders` builds train/val/test loaders.
+- [x] **Normalization**: Applied during preprocessing; no runtime normalization.
 
 ### Step 5: Training Script + Docker
 - [x] **Train Script**: `temporal_vit/training/train.py` uses `TrainConfig` in code.
-- [x] **Data**: `GCSTrialSequenceDataset` with `transform=normalize_fn`.
-- [x] **Metrics**: Accuracy + AUC in eval.
-- [ ] **Outputs**: Save checkpoints and stats to GCS (currently local paths).
+- [x] **Data**: `ParquetSequenceDataset` + `build_parquet_dataloaders`.
+- [x] **Metrics**: Accuracy + AUC in eval; class-weighted loss + label smoothing.
+- [x] **Outputs**: Checkpoints written to `gs://lfp-temporal-vit/vertex-runs/<run_id>/checkpoints/`.
+- [x] **Tracking**: Vertex Experiments + TensorBoard logging enabled.
 
 **Dockerfile** (root):
 ```bash
@@ -99,6 +109,8 @@ docker build -t temporal-vit:latest .
 gcloud ai custom-jobs create --region=us-central1 --display-name=temporal-vit-train-cpu \
   --worker-pool-spec=machine-type=n1-standard-8,replica-count=1,container-image-uri=us-central1-docker.pkg.dev/lfp-temporal-vit/vertex-job1/temporal-vit:latest
 ```
+
+**Current job config**: `vertex_custom_job_a100_tensorboard.yaml` (A100 + TensorBoard + baseOutputDirectory).
 
 ### Step 6: Vertex Eval Job
 - [ ] **Load Best Checkpoint** from GCS.
