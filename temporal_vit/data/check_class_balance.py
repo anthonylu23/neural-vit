@@ -44,9 +44,14 @@ def _count_labels(paths: List[str], label_column: str, batch_size: int) -> Count
 def _print_counts(name: str, counts: Counter) -> None:
     total = sum(counts.values())
     print(f"{name} (total={total})")
-    for label, count in counts.most_common():
+    if not counts:
+        print("  (no labels found)")
+        return
+    print("  label\tcount\tpct")
+    for label in sorted(counts.keys(), key=lambda x: str(x)):
+        count = counts[label]
         pct = (count / total * 100.0) if total else 0.0
-        print(f"  {label}: {count} ({pct:.2f}%)")
+        print(f"  {label}\t{count}\t{pct:.2f}%")
 
 
 def main() -> None:
