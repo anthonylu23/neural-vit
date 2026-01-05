@@ -125,7 +125,10 @@ def train(cfg: TrainConfig):
     )
     weights = counts.sum() / (counts * num_classes)
     weights = torch.where(counts > 0, weights, torch.zeros_like(weights))
-    criterion = torch.nn.CrossEntropyLoss(weight=weights.to(device))
+    criterion = torch.nn.CrossEntropyLoss(
+        weight=weights.to(device),
+        label_smoothing=cfg.label_smoothing,
+    )
 
     best_val_acc = 0.0
     output_dir = Path(cfg.output_dir) if cfg.output_dir else None
@@ -137,6 +140,8 @@ def train(cfg: TrainConfig):
         running_loss = 0.0
         correct = 0
         total = 0
+        train_probs = []
+        train_labels = []
 
         for specs, labels in train_loader:
             specs = specs.to(device, non_blocking=True)
@@ -152,14 +157,21 @@ def train(cfg: TrainConfig):
             preds = torch.argmax(logits, dim=1)
             correct += (preds == labels).sum().item()
             total += labels.size(0)
+            probs = torch.softmax(logits.detach(), dim=1)[:, 1].cpu().numpy()
+            train_probs.extend(probs.tolist())
+            train_labels.extend(labels.detach().cpu().numpy().tolist())
 
         train_loss = running_loss / max(total, 1)
         train_acc = correct / max(total, 1)
+        try:
+            train_auc = roc_auc_score(train_labels, train_probs)
+        except ValueError:
+            train_auc = float("nan")
 
         val_loss, val_acc, val_auc = evaluate(model, val_loader, device, criterion)
         print(
             f"Epoch {epoch}/{cfg.epochs} | "
-            f"train loss {train_loss:.4f}, acc {train_acc:.4f} | "
+            f"train loss {train_loss:.4f}, acc {train_acc:.4f}, auc {train_auc:.4f} | "
             f"val loss {val_loss:.4f}, acc {val_acc:.4f}, auc {val_auc:.4f}"
         )
 

@@ -20,6 +20,7 @@ class TrainConfig:
     loader: DataLoaderConfig = field(default_factory=DataLoaderConfig)
     lr: float = 3e-4
     weight_decay: float = 0.01
+    label_smoothing: float = 0.05
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
 
     n_trials: int = 8
