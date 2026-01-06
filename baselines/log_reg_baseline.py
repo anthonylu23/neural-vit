@@ -50,10 +50,12 @@ def _evaluate(model, X, y) -> dict:
 def main() -> None:
     args = _parse_args()
 
+    print("Loading train/val/test parquets...")
     train_df, train_specs = load_parquet(args.train)
     val_df, val_specs = load_parquet(args.val)
     test_df, test_specs = load_parquet(args.test)
 
+    print("Building sequence features...")
     X_train, y_train = build_sequence_features(
         train_df,
         train_specs,
@@ -76,11 +78,14 @@ def main() -> None:
         feature_mode=args.feature_mode,
     )
 
+    print(f"Feature dim: {X_train.shape[1]} | Train sequences: {len(y_train)}")
+    print("Scaling features...")
     scaler = StandardScaler()
     X_train_scaled = scaler.fit_transform(X_train)
     X_val_scaled = scaler.transform(X_val)
     X_test_scaled = scaler.transform(X_test)
 
+    print("Training logistic regression...")
     model = LogisticRegression(
         max_iter=2000,
         class_weight="balanced",
@@ -89,6 +94,7 @@ def main() -> None:
     )
     model.fit(X_train_scaled, y_train)
 
+    print("Evaluating...")
     metrics = {
         "train": _evaluate(model, X_train_scaled, y_train),
         "val": _evaluate(model, X_val_scaled, y_val),
@@ -114,6 +120,7 @@ def main() -> None:
         }
     )
 
+    print("Saving metrics...")
     output_path = write_metrics(args.output_dir, "log_reg", payload)
     print(f"Metrics written to {output_path}")
 

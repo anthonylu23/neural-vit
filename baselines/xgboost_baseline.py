@@ -65,10 +65,12 @@ def main() -> None:
 
     args = _parse_args()
 
+    print("Loading train/val/test parquets...")
     train_df, train_specs = load_parquet(args.train)
     val_df, val_specs = load_parquet(args.val)
     test_df, test_specs = load_parquet(args.test)
 
+    print("Building sequence features...")
     X_train, y_train = build_sequence_features(
         train_df,
         train_specs,
@@ -91,10 +93,12 @@ def main() -> None:
         feature_mode=args.feature_mode,
     )
 
+    print(f"Feature dim: {X_train.shape[1]} | Train sequences: {len(y_train)}")
     pos = float(np.sum(y_train == 1))
     neg = float(np.sum(y_train == 0))
     scale_pos_weight = neg / max(pos, 1.0)
 
+    print("Training XGBoost...")
     model = xgb.XGBClassifier(
         n_estimators=args.n_estimators,
         max_depth=args.max_depth,
@@ -115,6 +119,7 @@ def main() -> None:
         early_stopping_rounds=args.early_stopping_rounds,
     )
 
+    print("Evaluating...")
     metrics = {
         "train": _evaluate(model, X_train, y_train),
         "val": _evaluate(model, X_val, y_val),
@@ -149,6 +154,7 @@ def main() -> None:
         }
     )
 
+    print("Saving metrics...")
     output_path = write_metrics(args.output_dir, "xgboost", payload)
     print(f"Metrics written to {output_path}")
 
