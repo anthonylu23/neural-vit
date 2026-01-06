@@ -177,10 +177,14 @@ def train(cfg: TrainConfig):
     )
     run_id = cfg.run_name or build_run_id()
     checkpoint_dir = None
+    checkpoint_dir_gcs = None
     if output_dir:
-        checkpoint_dir = _checkpoint_dir(output_dir, run_id)
-        if not _is_gcs_path(checkpoint_dir):
-            Path(checkpoint_dir).mkdir(parents=True, exist_ok=True)
+        if _is_gcs_path(output_dir):
+            checkpoint_dir_gcs = _checkpoint_dir(output_dir, run_id)
+            checkpoint_dir = os.path.join("runs", run_id, "checkpoints")
+        else:
+            checkpoint_dir = _checkpoint_dir(output_dir, run_id)
+        Path(checkpoint_dir).mkdir(parents=True, exist_ok=True)
     logger = ExperimentLogger(
         run_id=run_id,
         output_dir=output_dir,
@@ -289,6 +293,16 @@ def train(cfg: TrainConfig):
             "config": asdict(model.config),
         }
         _save_checkpoint(ckpt, _checkpoint_path(checkpoint_dir, "final.pt"))
+        if checkpoint_dir_gcs:
+            print("Uploading checkpoints to GCS...")
+            try:
+                import gcsfs
+
+                fs = gcsfs.GCSFileSystem()
+                fs.put(checkpoint_dir, checkpoint_dir_gcs, recursive=True)
+                print("Checkpoint upload complete.")
+            except Exception as exc:
+                print(f"Checkpoint upload failed: {exc}")
 
 
 def main():
