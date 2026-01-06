@@ -56,6 +56,6 @@ if __name__ == "__main__":
         bq_dataset_id="lab6_mouse_lfp",
         bq_table_id="auditory_cortex",
         gcs_bucket="lfp_spec_datasets",
-        gcs_prefix="neural/v1",
+        gcs_prefix="neural/v2",
     )
     print("Dataset exported to GCS successfully")
