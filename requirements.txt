@@ -3,7 +3,10 @@ pandas
 scipy
 tqdm
 scikit-learn
+matplotlib
 pyarrow
+torch
+xgboost
 google-cloud-bigquery
 google-cloud-storage
 google-cloud-aiplatform
