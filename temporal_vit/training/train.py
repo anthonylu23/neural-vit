@@ -208,7 +208,11 @@ def train(cfg: TrainConfig):
             train_probs = []
             train_labels = []
 
+            batch_started = False
             for specs, labels in train_loader:
+                if not batch_started:
+                    print(f"Epoch {epoch}/{cfg.epochs} first train batch start")
+                    batch_started = True
                 specs = specs.to(device, non_blocking=True)
                 labels = labels.to(device, non_blocking=True)
 
@@ -233,7 +237,9 @@ def train(cfg: TrainConfig):
             except ValueError:
                 train_auc = float("nan")
 
+            print(f"Epoch {epoch}/{cfg.epochs} validation start")
             val_loss, val_acc, val_auc = evaluate(model, val_loader, device, criterion)
+            print(f"Epoch {epoch}/{cfg.epochs} logging metrics")
             logger.log_metrics(
                 {
                     "train/loss": train_loss,
@@ -245,6 +251,7 @@ def train(cfg: TrainConfig):
                 },
                 step=epoch,
             )
+            print(f"Epoch {epoch}/{cfg.epochs} metrics logged")
             print(
                 f"Epoch {epoch}/{cfg.epochs} | "
                 f"train loss {train_loss:.4f}, acc {train_acc:.4f}, auc {train_auc:.4f} | "
@@ -252,6 +259,7 @@ def train(cfg: TrainConfig):
             )
 
             if checkpoint_dir and val_acc > best_val_acc:
+                print(f"Epoch {epoch}/{cfg.epochs} checkpoint save start")
                 best_val_acc = val_acc
                 ckpt = {
                     "model_state": model.state_dict(),
@@ -260,6 +268,7 @@ def train(cfg: TrainConfig):
                 _save_checkpoint(
                     ckpt, _checkpoint_path(checkpoint_dir, f"best_epoch_{epoch}.pt")
                 )
+                print(f"Epoch {epoch}/{cfg.epochs} checkpoint save complete")
 
         test_loss, test_acc, test_auc = evaluate(model, test_loader, device, criterion)
         logger.log_metrics(
