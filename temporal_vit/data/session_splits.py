@@ -1,10 +1,39 @@
 import numpy as np
-from sklearn.model_selection import train_test_split, StratifiedGroupKFold
+from sklearn.model_selection import StratifiedGroupKFold
+
+
+def _stratified_group_split(labels, groups, test_size, random_state=42):
+    if not 0 < test_size < 1:
+        raise ValueError("test_size must be between 0 and 1.")
+
+    groups = np.asarray(groups)
+    labels = np.asarray(labels)
+    unique_groups = np.unique(groups)
+    if unique_groups.size < 2:
+        raise ValueError("Need at least 2 groups to split.")
+
+    n_splits = max(2, int(round(1 / test_size)))
+    n_splits = min(n_splits, unique_groups.size)
+    if n_splits < 2:
+        raise ValueError("Not enough groups to create a split.")
+
+    sgkf = StratifiedGroupKFold(n_splits=n_splits, shuffle=True, random_state=random_state)
+    best = None
+    for train_idx, test_idx in sgkf.split(np.zeros(labels.shape[0]), labels, groups):
+        ratio = len(test_idx) / len(labels)
+        diff = abs(ratio - test_size)
+        if best is None or diff < best[0]:
+            best = (diff, train_idx, test_idx)
+
+    if best is None:
+        raise ValueError("Unable to create a stratified group split.")
+
+    return best[1], best[2]
 
 
 def create_session_splits(sequences, test_size, val_size, random_state=42):
     """
-    Split sequences by session, stratified by condition label.
+    Split sequences by session with trial-level stratification.
 
     Args:
         sequences: list of dicts, each containing 'session' and 'label'
@@ -15,40 +44,40 @@ def create_session_splits(sequences, test_size, val_size, random_state=42):
     Returns:
         train_seqs, val_seqs, test_seqs
     """
-    session_to_label = {}
-    for seq in sequences:
-        session_to_label[seq['session']] = seq['label']
-
-    sessions = list(session_to_label.keys())
-    labels = [session_to_label[s] for s in sessions]
-
-    train_val_sessions, test_sessions = train_test_split(
-        sessions,
-        test_size=test_size,
-        stratify=labels,
-        random_state=random_state
-    )
-
-    train_val_labels = [session_to_label[s] for s in train_val_sessions]
+    if not 0 < val_size < 1:
+        raise ValueError("val_size must be between 0 and 1.")
     val_ratio = val_size / (1 - test_size)
+    if not 0 < val_ratio < 1:
+        raise ValueError("val_size is too large relative to test_size.")
 
-    train_sessions, val_sessions = train_test_split(
-        train_val_sessions,
-        test_size=val_ratio,
-        stratify=train_val_labels,
-        random_state=random_state
+    labels = np.array([seq["label"] for seq in sequences])
+    groups = np.array([seq["session"] for seq in sequences])
+
+    train_val_idx, test_idx = _stratified_group_split(
+        labels, groups, test_size=test_size, random_state=random_state
+    )
+    train_val = [sequences[i] for i in train_val_idx]
+    test_seqs = [sequences[i] for i in test_idx]
+
+    train_val_labels = labels[train_val_idx]
+    train_val_groups = groups[train_val_idx]
+    train_idx, val_idx = _stratified_group_split(
+        train_val_labels, train_val_groups, test_size=val_ratio, random_state=random_state
     )
 
-    train_sessions = set(train_sessions)
-    val_sessions = set(val_sessions)
-    test_sessions = set(test_sessions)
+    train_seqs = [train_val[i] for i in train_idx]
+    val_seqs = [train_val[i] for i in val_idx]
 
-    train_seqs = [s for s in sequences if s['session'] in train_sessions]
-    val_seqs = [s for s in sequences if s['session'] in val_sessions]
-    test_seqs = [s for s in sequences if s['session'] in test_sessions]
+    train_sessions = {s["session"] for s in train_seqs}
+    val_sessions = {s["session"] for s in val_seqs}
+    test_sessions = {s["session"] for s in test_seqs}
 
-    print(f"Sessions - Train: {len(train_sessions)}, Val: {len(val_sessions)}, Test: {len(test_sessions)}")
-    print(f"Sequences - Train: {len(train_seqs)}, Val: {len(val_seqs)}, Test: {len(test_seqs)}")
+    print(
+        f"Sessions - Train: {len(train_sessions)}, Val: {len(val_sessions)}, Test: {len(test_sessions)}"
+    )
+    print(
+        f"Sequences - Train: {len(train_seqs)}, Val: {len(val_seqs)}, Test: {len(test_seqs)}"
+    )
 
     assert train_sessions.isdisjoint(val_sessions)
     assert train_sessions.isdisjoint(test_sessions)
@@ -59,7 +88,7 @@ def create_session_splits(sequences, test_size, val_size, random_state=42):
 
 def create_session_splits_df(df, test_size, val_size, random_state=42):
     """
-    Split DataFrame by session, stratified by condition.
+    Split DataFrame by session with trial-level stratification.
 
     Args:
         df: pandas DataFrame containing 'session' and 'condition' columns
@@ -70,42 +99,43 @@ def create_session_splits_df(df, test_size, val_size, random_state=42):
     Returns:
         train_df, val_df, test_df
     """
-    session_info = df[['session', 'condition']].drop_duplicates()
-    sessions = session_info['session'].values
-    labels = session_info['condition'].values
-
-    train_val_sessions, test_sessions = train_test_split(
-        sessions,
-        test_size=test_size,
-        stratify=labels,
-        random_state=random_state
-    )
-
-    train_val_mask = np.isin(sessions, train_val_sessions)
-    train_val_labels = labels[train_val_mask]
+    if not 0 < val_size < 1:
+        raise ValueError("val_size must be between 0 and 1.")
     val_ratio = val_size / (1 - test_size)
+    if not 0 < val_ratio < 1:
+        raise ValueError("val_size is too large relative to test_size.")
 
-    train_sessions, val_sessions = train_test_split(
-        train_val_sessions,
+    labels = df["condition"].values
+    groups = df["session"].values
+
+    train_val_idx, test_idx = _stratified_group_split(
+        labels, groups, test_size=test_size, random_state=random_state
+    )
+    train_val_df = df.iloc[train_val_idx].copy()
+    test_df = df.iloc[test_idx].copy()
+
+    train_idx, val_idx = _stratified_group_split(
+        train_val_df["condition"].values,
+        train_val_df["session"].values,
         test_size=val_ratio,
-        stratify=train_val_labels,
-        random_state=random_state
+        random_state=random_state,
     )
 
-    train_df = df[df['session'].isin(train_sessions)].copy()
-    val_df = df[df['session'].isin(val_sessions)].copy()
-    test_df = df[df['session'].isin(test_sessions)].copy()
+    train_df = train_val_df.iloc[train_idx].copy()
+    val_df = train_val_df.iloc[val_idx].copy()
 
-    print(f"Sessions - Train: {len(train_sessions)}, Val: {len(val_sessions)}, Test: {len(test_sessions)}")
+    train_sessions = set(train_df["session"].unique())
+    val_sessions = set(val_df["session"].unique())
+    test_sessions = set(test_df["session"].unique())
+
+    print(
+        f"Sessions - Train: {len(train_sessions)}, Val: {len(val_sessions)}, Test: {len(test_sessions)}"
+    )
     print(f"Trials - Train: {len(train_df)}, Val: {len(val_df)}, Test: {len(test_df)}")
 
-    train_s = set(train_sessions)
-    val_s = set(val_sessions)
-    test_s = set(test_sessions)
-
-    assert train_s.isdisjoint(val_s)
-    assert train_s.isdisjoint(test_s)
-    assert val_s.isdisjoint(test_s)
+    assert train_sessions.isdisjoint(val_sessions)
+    assert train_sessions.isdisjoint(test_sessions)
+    assert val_sessions.isdisjoint(test_sessions)
 
     return train_df, val_df, test_df
 
