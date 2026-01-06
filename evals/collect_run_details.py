@@ -2,6 +2,7 @@ import argparse
 import csv
 import json
 import os
+import sys
 from typing import Any, Dict, List, Optional
 
 try:
@@ -87,6 +88,89 @@ def _resolve_experiment(experiment: Optional[str]) -> Optional[str]:
     return experiment or os.environ.get("AIP_EXPERIMENT_NAME")
 
 
+def _resolve_experiment_prefix(prefix: Optional[str]) -> str:
+    return prefix or os.environ.get("LFP_EXPERIMENT_PREFIX") or "lfp-temporal"
+
+
+def _call_noarg(obj: Any, name: str) -> Optional[Any]:
+    if not hasattr(obj, name):
+        return None
+    value = getattr(obj, name)
+    if callable(value):
+        try:
+            return value()
+        except TypeError:
+            return None
+        except Exception:
+            return None
+    return value
+
+
+def _resource_to_dict(resource: Any) -> Optional[Dict[str, Any]]:
+    if resource is None:
+        return None
+    if hasattr(resource, "to_dict"):
+        try:
+            return resource.to_dict()
+        except Exception:
+            return None
+    try:
+        from google.protobuf.json_format import MessageToDict
+
+        return MessageToDict(resource)
+    except Exception:
+        return None
+
+
+def _extract_metrics_params(run_obj: Any) -> Dict[str, Any]:
+    metrics = None
+    params = None
+
+    for name in ("metrics", "metric_values", "get_metrics", "list_metrics"):
+        metrics = _call_noarg(run_obj, name)
+        if metrics is not None:
+            break
+
+    for name in ("parameters", "params", "get_params", "list_params", "hyperparameters"):
+        params = _call_noarg(run_obj, name)
+        if params is not None:
+            break
+
+    if metrics is None or params is None:
+        resource_dict = _resource_to_dict(getattr(run_obj, "_gca_resource", None))
+        if resource_dict:
+            if metrics is None:
+                for key in ("metrics", "metric_values", "metricValues"):
+                    if key in resource_dict:
+                        metrics = resource_dict[key]
+                        break
+            if params is None:
+                for key in ("parameters", "params", "hyperparameters"):
+                    if key in resource_dict:
+                        params = resource_dict[key]
+                        break
+
+    return {"metrics": metrics, "params": params}
+
+
+def _serialize_run(run_obj: Any, run_id: Optional[str]) -> Dict[str, Any]:
+    data: Dict[str, Any] = {"run_id": run_id}
+    for attr in (
+        "name",
+        "display_name",
+        "resource_name",
+        "state",
+        "create_time",
+        "update_time",
+    ):
+        if hasattr(run_obj, attr):
+            data[attr] = getattr(run_obj, attr)
+
+    metrics_params = _extract_metrics_params(run_obj)
+    data.update(metrics_params)
+    return data
+
+
 def _fetch_experiment_run(
     project: Optional[str],
     location: Optional[str],
@@ -130,18 +214,70 @@ def _fetch_experiment_run(
     if run_obj is None:
         return {"status": "not_found", "errors": errors}
 
-    data = {"status": "found", "run_id": run_id}
-    for attr in (
-        "name",
-        "display_name",
-        "resource_name",
-        "state",
-        "create_time",
-        "update_time",
-    ):
-        if hasattr(run_obj, attr):
-            data[attr] = getattr(run_obj, attr)
+    data = {"status": "found"}
+    data.update(_serialize_run(run_obj, run_id))
     return data
+
+
+def _list_experiment_runs(
+    project: Optional[str],
+    location: Optional[str],
+    experiment: Optional[str],
+) -> Dict[str, Any]:
+    if aiplatform is None:
+        return {"status": "unavailable", "reason": "google-cloud-aiplatform_not_installed"}
+    if not project or not location or not experiment:
+        return {"status": "skipped", "reason": "missing_project_location_or_experiment"}
+
+    try:
+        aiplatform.init(project=project, location=location, experiment=experiment)
+        exp = aiplatform.Experiment(experiment)
+        runs = exp.list_runs()
+    except Exception as exc:
+        return {"status": "error", "error": str(exc)}
+
+    serialized = []
+    for run in runs:
+        run_id = getattr(run, "display_name", None) or getattr(run, "name", None)
+        serialized.append(_serialize_run(run, run_id))
+
+    return {"status": "ok", "runs": serialized}
+
+
+def _list_experiments(
+    project: Optional[str],
+    location: Optional[str],
+    prefix: Optional[str],
+) -> Dict[str, Any]:
+    if aiplatform is None:
+        return {"status": "unavailable", "reason": "google-cloud-aiplatform_not_installed"}
+    if not project or not location:
+        return {"status": "skipped", "reason": "missing_project_or_location"}
+
+    try:
+        aiplatform.init(project=project, location=location)
+        experiments = aiplatform.Experiment.list()
+    except Exception as exc:
+        return {"status": "error", "error": str(exc)}
+
+    filtered = []
+    for experiment in experiments:
+        name = getattr(experiment, "name", None)
+        display_name = getattr(experiment, "display_name", None)
+        resource_name = getattr(experiment, "resource_name", None)
+        label = display_name or name or resource_name
+        if prefix and label and prefix not in label:
+            continue
+        filtered.append(
+            {
+                "name": name,
+                "display_name": display_name,
+                "resource_name": resource_name,
+                "runs": _list_experiment_runs(project, location, display_name or name),
+            }
+        )
+
+    return {"status": "ok", "experiments": filtered}
 
 
 def _list_paths(base_path: str) -> Dict[str, Any]:
@@ -219,35 +355,58 @@ def _parse_args() -> argparse.Namespace:
         default="gs://lfp-temporal-vit/vertex-runs",
         help="Root path for checkpoints.",
     )
+    parser.add_argument(
+        "--all-experiments",
+        action="store_true",
+        help="Fetch all experiments matching the prefix.",
+    )
+    parser.add_argument(
+        "--experiment-prefix",
+        default=None,
+        help="Prefix for experiment listing (default: lfp-temporal).",
+    )
     parser.add_argument("--output", default=None, help="Optional JSON output path.")
     return parser.parse_args()
 
 
 def main() -> None:
     args = _parse_args()
+    no_args = len(sys.argv) == 1
     project = _resolve_project(args.project)
     location = _resolve_location(args.location)
     experiment = _resolve_experiment(args.experiment) or "lfp-temporal-vit-experiments"
     tb_log_dir = _resolve_tb_log_dir(args.tensorboard_log_dir)
+    all_experiments = args.all_experiments or no_args
+    experiment_prefix = _resolve_experiment_prefix(args.experiment_prefix)
 
     results = []
-    run_ids = list(args.run_ids)
-    while len(run_ids) < len(args.csvs):
-        run_ids.append(None)
+    if not all_experiments and args.csvs:
+        run_ids = list(args.run_ids)
+        while len(run_ids) < len(args.csvs):
+            run_ids.append(None)
 
-    for csv_path, run_id in zip(args.csvs, run_ids):
-        summary = _read_csv_metrics(csv_path)
-        result = {
-            "csv": csv_path,
-            "run_id": run_id,
-            "csv_summary": summary,
-            "experiment": _fetch_experiment_run(project, location, experiment, run_id),
-            "tensorboard": _tensorboard_details(tb_log_dir, run_id),
-            "checkpoints": _checkpoint_details(args.checkpoint_root, run_id),
-        }
-        results.append(result)
+        for csv_path, run_id in zip(args.csvs, run_ids):
+            summary = _read_csv_metrics(csv_path)
+            result = {
+                "csv": csv_path,
+                "run_id": run_id,
+                "csv_summary": summary,
+                "experiment": _fetch_experiment_run(project, location, experiment, run_id),
+                "tensorboard": _tensorboard_details(tb_log_dir, run_id),
+                "checkpoints": _checkpoint_details(args.checkpoint_root, run_id),
+            }
+            results.append(result)
 
-    payload = {"project": project, "location": location, "experiment": experiment, "runs": results}
+    payload = {
+        "project": project,
+        "location": location,
+        "experiment": experiment,
+        "runs": results,
+        "experiment_runs": _list_experiment_runs(project, location, experiment),
+        "experiments": _list_experiments(project, location, experiment_prefix)
+        if all_experiments
+        else None,
+    }
     output = json.dumps(payload, indent=2, sort_keys=True)
 
     if args.output:

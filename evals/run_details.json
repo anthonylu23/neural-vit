@@ -1,0 +1,77 @@
+{
+  "experiment": "lfp-temporal-vit-experiments",
+  "experiment_runs": {
+    "reason": "google-cloud-aiplatform_not_installed",
+    "status": "unavailable"
+  },
+  "location": "us-central1",
+  "project": null,
+  "runs": [
+    {
+      "checkpoints": {
+        "path": "gs://lfp-temporal-vit/vertex-runs/RUN_ID_1/checkpoints",
+        "reason": "gcsfs_not_installed",
+        "status": "unavailable"
+      },
+      "csv": "evals/no_class_weights.csv",
+      "csv_summary": {
+        "best_val_acc": 0.7337,
+        "best_val_acc_epoch": "20",
+        "best_val_auc": 0.6985,
+        "best_val_auc_epoch": "1",
+        "last_epoch": "20",
+        "last_train_acc": 0.9476,
+        "last_train_loss": 0.1192,
+        "last_val_acc": 0.7337,
+        "last_val_auc": 0.6838,
+        "last_val_loss": 1.2344,
+        "row_count": 21,
+        "test_acc": 0.9008,
+        "test_auc": 0.9612,
+        "test_loss": 0.248
+      },
+      "experiment": {
+        "reason": "google-cloud-aiplatform_not_installed",
+        "status": "unavailable"
+      },
+      "run_id": "RUN_ID_1",
+      "tensorboard": {
+        "reason": "tensorboard_log_dir_not_set",
+        "status": "skipped"
+      }
+    },
+    {
+      "checkpoints": {
+        "path": "gs://lfp-temporal-vit/vertex-runs/RUN_ID_2/checkpoints",
+        "reason": "gcsfs_not_installed",
+        "status": "unavailable"
+      },
+      "csv": "evals/class_weighted_incr_dropout.csv",
+      "csv_summary": {
+        "best_val_acc": 0.6727,
+        "best_val_acc_epoch": "7",
+        "best_val_auc": 0.6619,
+        "best_val_auc_epoch": "17",
+        "last_epoch": "20",
+        "last_train_acc": 0.8265,
+        "last_train_loss": 0.3927,
+        "last_val_acc": 0.6034,
+        "last_val_auc": 0.6266,
+        "last_val_loss": 0.8338,
+        "row_count": 21,
+        "test_acc": 0.7203,
+        "test_auc": 0.7941,
+        "test_loss": 0.4522
+      },
+      "experiment": {
+        "reason": "google-cloud-aiplatform_not_installed",
+        "status": "unavailable"
+      },
+      "run_id": "RUN_ID_2",
+      "tensorboard": {
+        "reason": "tensorboard_log_dir_not_set",
+        "status": "skipped"
+      }
+    }
+  ]
+}

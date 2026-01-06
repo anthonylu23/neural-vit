@@ -293,6 +293,7 @@ def main():
         use_preprocessed=True,
         stats_path=None,
         output_dir=output_dir,
+        model_size="tiny",
         experiment_name="lfp-temporal-vit-experiments",
         project_id="lfp-temporal-vit",
         location="us-central1",
