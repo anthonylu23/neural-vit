@@ -79,6 +79,7 @@ class ExperimentLogger:
         self._writer = None
         self._metrics_path = None
         self._metrics_gcs_path = None
+        self._metrics_gcs_fs = None
 
         if enable_tensorboard and SummaryWriter is not None:
             log_dir = _resolve_tb_log_dir(run_id, output_dir)
@@ -92,6 +93,12 @@ class ExperimentLogger:
         self._metrics_path = os.path.join(metrics_dir, metrics_filename)
         if output_dir and output_dir.startswith("gs://"):
             self._metrics_gcs_path = f"{output_dir.rstrip('/')}/{run_id}/metrics/{metrics_filename}"
+            try:
+                import gcsfs
+
+                self._metrics_gcs_fs = gcsfs.GCSFileSystem()
+            except Exception:
+                self._metrics_gcs_fs = None
 
         if enable_vertex and aiplatform is not None:
             project = _resolve_project(project_id)
@@ -127,6 +134,13 @@ class ExperimentLogger:
             with open(self._metrics_path, "a", encoding="utf-8") as handle:
                 handle.write(json.dumps(record))
                 handle.write("\n")
+        if self._metrics_gcs_path and self._metrics_gcs_fs is not None:
+            try:
+                with self._metrics_gcs_fs.open(self._metrics_gcs_path, "a") as handle:
+                    handle.write(json.dumps(record))
+                    handle.write("\n")
+            except Exception:
+                pass
 
     def close(self) -> None:
         if self._writer is not None:

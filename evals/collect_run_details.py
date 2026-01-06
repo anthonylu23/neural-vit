@@ -89,7 +89,7 @@ def _resolve_experiment(experiment: Optional[str]) -> Optional[str]:
 
 
 def _resolve_experiment_prefix(prefix: Optional[str]) -> str:
-    return prefix or os.environ.get("LFP_EXPERIMENT_PREFIX") or "lfp-temporal"
+    return prefix or os.environ.get("LFP_EXPERIMENT_PREFIX") or "lfp-temporal-experiments"
 
 
 def _call_noarg(obj: Any, name: str) -> Optional[Any]:
@@ -119,36 +119,143 @@ def _resource_to_dict(resource: Any) -> Optional[Dict[str, Any]]:
 
         return MessageToDict(resource)
     except Exception:
+    return None
+
+
+def _unwrap_value(value: Any) -> Any:
+    if value is None:
         return None
+    if hasattr(value, "HasField"):
+        for field in ("string_value", "number_value", "bool_value", "struct_value", "list_value"):
+            try:
+                if value.HasField(field):
+                    field_value = getattr(value, field)
+                    break
+            except Exception:
+                field_value = None
+                break
+        else:
+            field_value = None
+    else:
+        field_value = None
+
+    if field_value is None:
+        if hasattr(value, "string_value") and value.string_value:
+            return value.string_value
+        if hasattr(value, "number_value"):
+            return value.number_value
+        if hasattr(value, "bool_value"):
+            return value.bool_value
+        if hasattr(value, "struct_value"):
+            field_value = value.struct_value
+        if hasattr(value, "list_value"):
+            field_value = value.list_value
+
+    if field_value is None:
+        return value
+
+    if hasattr(field_value, "fields"):
+        return {k: _unwrap_value(v) for k, v in field_value.fields.items()}
+    if hasattr(field_value, "values"):
+        return [_unwrap_value(v) for v in field_value.values]
+    return field_value
+
+
+def _normalize_kv_collection(value: Any, name_keys: List[str], value_keys: List[str]) -> Any:
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, list):
+        result: Dict[str, Any] = {}
+        leftovers = []
+        for item in value:
+            if isinstance(item, dict):
+                name = next((item.get(k) for k in name_keys if item.get(k) is not None), None)
+                val = next((item.get(k) for k in value_keys if item.get(k) is not None), None)
+                if name is not None:
+                    result[str(name)] = _unwrap_value(val)
+                else:
+                    leftovers.append(item)
+            else:
+                name = None
+                for key in name_keys:
+                    if hasattr(item, key):
+                        name = getattr(item, key)
+                        break
+                val = None
+                for key in value_keys:
+                    if hasattr(item, key):
+                        val = getattr(item, key)
+                        break
+                if name is not None:
+                    result[str(name)] = _unwrap_value(val)
+                else:
+                    leftovers.append(item)
+        if result:
+            if leftovers:
+                result["_raw"] = leftovers
+            return result
+        return value
+    return value
 
 
 def _extract_metrics_params(run_obj: Any) -> Dict[str, Any]:
     metrics = None
     params = None
 
-    for name in ("metrics", "metric_values", "get_metrics", "list_metrics"):
+    for name in ("get_metrics", "list_metrics", "metrics", "metric_values"):
         metrics = _call_noarg(run_obj, name)
         if metrics is not None:
             break
 
-    for name in ("parameters", "params", "get_params", "list_params", "hyperparameters"):
+    for name in ("get_params", "list_params", "parameters", "params", "hyperparameters"):
         params = _call_noarg(run_obj, name)
         if params is not None:
             break
 
+    metrics = _normalize_kv_collection(
+        metrics,
+        name_keys=["name", "metric_id", "metric", "metric_name", "display_name"],
+        value_keys=["value", "metric_value", "double_value", "float_value", "int_value", "number_value"],
+    )
+    params = _normalize_kv_collection(
+        params,
+        name_keys=["name", "parameter_id", "parameter", "param", "display_name"],
+        value_keys=["value", "string_value", "double_value", "float_value", "int_value", "number_value", "bool_value"],
+    )
+
     if metrics is None or params is None:
         resource_dict = _resource_to_dict(getattr(run_obj, "_gca_resource", None))
         if resource_dict:
+            metadata = resource_dict.get("metadata") or {}
             if metrics is None:
                 for key in ("metrics", "metric_values", "metricValues"):
                     if key in resource_dict:
                         metrics = resource_dict[key]
+                        break
+                    if key in metadata:
+                        metrics = metadata[key]
                         break
             if params is None:
                 for key in ("parameters", "params", "hyperparameters"):
                     if key in resource_dict:
                         params = resource_dict[key]
                         break
+                    if key in metadata:
+                        params = metadata[key]
+                        break
+
+    metrics = _normalize_kv_collection(
+        metrics,
+        name_keys=["name", "metric_id", "metric", "metric_name", "display_name"],
+        value_keys=["value", "metric_value", "double_value", "float_value", "int_value", "number_value"],
+    )
+    params = _normalize_kv_collection(
+        params,
+        name_keys=["name", "parameter_id", "parameter", "param", "display_name"],
+        value_keys=["value", "string_value", "double_value", "float_value", "int_value", "number_value", "bool_value"],
+    )
 
     return {"metrics": metrics, "params": params}
 
@@ -194,7 +301,14 @@ def _fetch_experiment_run(
     if hasattr(aiplatform, "Experiment"):
         try:
             exp = aiplatform.Experiment(experiment)
-            runs = exp.list_runs()
+            if hasattr(exp, "list_runs"):
+                runs = exp.list_runs()
+            elif hasattr(aiplatform, "ExperimentRun") and hasattr(aiplatform.ExperimentRun, "list"):
+                runs = aiplatform.ExperimentRun.list(experiment=experiment)
+            elif hasattr(aiplatform, "ExperimentRun") and hasattr(aiplatform.ExperimentRun, "list_experiment_runs"):
+                runs = aiplatform.ExperimentRun.list_experiment_runs(experiment=experiment)
+            else:
+                runs = []
             for candidate in runs:
                 name = getattr(candidate, "name", "") or ""
                 display = getattr(candidate, "display_name", "") or ""
@@ -206,10 +320,19 @@ def _fetch_experiment_run(
             errors.append(f"list_runs_failed: {exc}")
 
     if run_obj is None and hasattr(aiplatform, "ExperimentRun"):
-        try:
-            run_obj = aiplatform.ExperimentRun(run_id)
-        except Exception as exc:
-            errors.append(f"experiment_run_failed: {exc}")
+        for attr in ("get", "from_resource_name"):
+            if hasattr(aiplatform.ExperimentRun, attr):
+                try:
+                    run_obj = getattr(aiplatform.ExperimentRun, attr)(run_id)
+                    if run_obj is not None:
+                        break
+                except Exception as exc:
+                    errors.append(f"experiment_run_{attr}_failed: {exc}")
+        if run_obj is None:
+            try:
+                run_obj = aiplatform.ExperimentRun(run_id)
+            except Exception as exc:
+                errors.append(f"experiment_run_failed: {exc}")
 
     if run_obj is None:
         return {"status": "not_found", "errors": errors}
@@ -232,7 +355,14 @@ def _list_experiment_runs(
     try:
         aiplatform.init(project=project, location=location, experiment=experiment)
         exp = aiplatform.Experiment(experiment)
-        runs = exp.list_runs()
+        if hasattr(exp, "list_runs"):
+            runs = exp.list_runs()
+        elif hasattr(aiplatform, "ExperimentRun") and hasattr(aiplatform.ExperimentRun, "list"):
+            runs = aiplatform.ExperimentRun.list(experiment=experiment)
+        elif hasattr(aiplatform, "ExperimentRun") and hasattr(aiplatform.ExperimentRun, "list_experiment_runs"):
+            runs = aiplatform.ExperimentRun.list_experiment_runs(experiment=experiment)
+        else:
+            return {"status": "error", "error": "Experiment run listing not supported in this SDK version."}
     except Exception as exc:
         return {"status": "error", "error": str(exc)}
 
