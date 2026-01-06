@@ -305,7 +305,7 @@ def preprocess_splits_to_gcs(
 
 def main():
     bucket_name = "lfp_spec_datasets"
-    prefix = "neural/v1"
+    prefix = "neural/v2"
 
     train_input = f"gs://{bucket_name}/{prefix}/train.parquet"
     val_input = f"gs://{bucket_name}/{prefix}/val.parquet"
