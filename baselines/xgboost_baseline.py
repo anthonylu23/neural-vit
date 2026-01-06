@@ -1,4 +1,8 @@
 import argparse
+from pathlib import Path
+import sys
+
+sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 import numpy as np
 from sklearn.metrics import accuracy_score, roc_auc_score
