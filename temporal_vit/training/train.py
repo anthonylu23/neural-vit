@@ -284,7 +284,7 @@ def train(cfg: TrainConfig):
 
 def main():
     bucket_name = "lfp_spec_datasets"
-    prefix = "neural/v1"
+    prefix = "neural/v2"
     output_dir = os.environ.get("AIP_MODEL_DIR") or os.environ.get("AIP_CHECKPOINT_DIR") or "runs/run1"
     config = TrainConfig(
         train_paths=[f"gs://{bucket_name}/{prefix}/train_preprocessed.parquet"],
