@@ -55,6 +55,23 @@ def _write_json(path: str, payload: dict) -> None:
     Path(path).write_bytes(content)
 
 
+def gpu_available() -> bool:
+    try:
+        import cupy as cp
+
+        return cp.cuda.runtime.getDeviceCount() > 0
+    except Exception:
+        pass
+    try:
+        import torch
+
+        return torch.cuda.is_available()
+    except Exception:
+        pass
+    env = os.environ.get("CUDA_VISIBLE_DEVICES")
+    return bool(env) and env not in ("-1", "")
+
+
 def _timestamp() -> str:
     return datetime.utcnow().strftime("%Y%m%d-%H%M%S")
 

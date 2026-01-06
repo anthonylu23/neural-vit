@@ -12,6 +12,7 @@ from baselines.common import (
     build_sequence_features,
     class_balance,
     default_paths,
+    gpu_available,
     load_parquet,
     write_metrics,
 )
@@ -99,25 +100,50 @@ def main() -> None:
     scale_pos_weight = neg / max(pos, 1.0)
 
     print("Training XGBoost...")
-    model = xgb.XGBClassifier(
-        n_estimators=args.n_estimators,
-        max_depth=args.max_depth,
-        learning_rate=args.learning_rate,
-        subsample=args.subsample,
-        colsample_bytree=args.colsample_bytree,
-        objective="binary:logistic",
-        eval_metric="auc",
-        scale_pos_weight=scale_pos_weight,
-        tree_method="hist",
-    )
+    use_gpu = gpu_available()
+    tree_method = "gpu_hist" if use_gpu else "hist"
+    predictor = "gpu_predictor" if use_gpu else "auto"
 
-    model.fit(
-        X_train,
-        y_train,
-        eval_set=[(X_val, y_val)],
-        verbose=False,
-        early_stopping_rounds=args.early_stopping_rounds,
-    )
+    def _build_model(method, pred):
+        return xgb.XGBClassifier(
+            n_estimators=args.n_estimators,
+            max_depth=args.max_depth,
+            learning_rate=args.learning_rate,
+            subsample=args.subsample,
+            colsample_bytree=args.colsample_bytree,
+            objective="binary:logistic",
+            eval_metric="auc",
+            scale_pos_weight=scale_pos_weight,
+            tree_method=method,
+            predictor=pred,
+        )
+
+    model = _build_model(tree_method, predictor)
+    try:
+        if use_gpu:
+            print("Using GPU for XGBoost")
+        else:
+            print("Using CPU for XGBoost")
+        model.fit(
+            X_train,
+            y_train,
+            eval_set=[(X_val, y_val)],
+            verbose=False,
+            early_stopping_rounds=args.early_stopping_rounds,
+        )
+    except Exception as exc:
+        if use_gpu:
+            print(f"GPU training failed ({exc}), falling back to CPU.")
+            model = _build_model("hist", "auto")
+            model.fit(
+                X_train,
+                y_train,
+                eval_set=[(X_val, y_val)],
+                verbose=False,
+                early_stopping_rounds=args.early_stopping_rounds,
+            )
+        else:
+            raise
 
     print("Evaluating...")
     metrics = {

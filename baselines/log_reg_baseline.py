@@ -14,9 +14,20 @@ from baselines.common import (
     build_sequence_features,
     class_balance,
     default_paths,
+    gpu_available,
     load_parquet,
     write_metrics,
 )
+
+try:
+    import cupy as cp
+except Exception:
+    cp = None
+
+try:
+    from cuml.linear_model import LogisticRegression as CuMLLogisticRegression
+except Exception:
+    CuMLLogisticRegression = None
 
 
 def _parse_args() -> argparse.Namespace:
@@ -39,9 +50,17 @@ def _parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _to_numpy(values):
+    if hasattr(values, "get"):
+        return values.get()
+    return np.asarray(values)
+
+
 def _evaluate(model, X, y) -> dict:
     probs = model.predict_proba(X)[:, 1]
+    probs = _to_numpy(probs)
     preds = (probs >= 0.5).astype(int)
+    y = _to_numpy(y)
     acc = accuracy_score(y, preds)
     auc = roc_auc_score(y, probs) if len(np.unique(y)) > 1 else float("nan")
     return {"acc": float(acc), "auc": float(auc)}
@@ -86,12 +105,18 @@ def main() -> None:
     X_test_scaled = scaler.transform(X_test)
 
     print("Training logistic regression...")
-    model = LogisticRegression(
-        max_iter=2000,
-        class_weight="balanced",
-        solver="saga",
-        n_jobs=-1,
-    )
+    use_gpu = gpu_available() and CuMLLogisticRegression is not None and cp is not None
+    if use_gpu:
+        print("Using GPU via cuML LogisticRegression")
+        model = CuMLLogisticRegression(max_iter=2000, class_weight="balanced")
+    else:
+        print("Using CPU LogisticRegression")
+        model = LogisticRegression(
+            max_iter=2000,
+            class_weight="balanced",
+            solver="saga",
+            n_jobs=-1,
+        )
     model.fit(X_train_scaled, y_train)
 
     print("Evaluating...")
