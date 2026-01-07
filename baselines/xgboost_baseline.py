@@ -118,23 +118,8 @@ def main() -> None:
             predictor=pred,
         )
 
-    model = _build_model(tree_method, predictor)
-    try:
-        if use_gpu:
-            print("Using GPU for XGBoost")
-        else:
-            print("Using CPU for XGBoost")
-        model.fit(
-            X_train,
-            y_train,
-            eval_set=[(X_val, y_val)],
-            verbose=False,
-            early_stopping_rounds=args.early_stopping_rounds,
-        )
-    except Exception as exc:
-        if use_gpu:
-            print(f"GPU training failed ({exc}), falling back to CPU.")
-            model = _build_model("hist", "auto")
+    def _fit_model(model):
+        try:
             model.fit(
                 X_train,
                 y_train,
@@ -142,6 +127,28 @@ def main() -> None:
                 verbose=False,
                 early_stopping_rounds=args.early_stopping_rounds,
             )
+        except TypeError as exc:
+            if "early_stopping_rounds" not in str(exc):
+                raise
+            model.fit(
+                X_train,
+                y_train,
+                eval_set=[(X_val, y_val)],
+                verbose=False,
+            )
+
+    model = _build_model(tree_method, predictor)
+    try:
+        if use_gpu:
+            print("Using GPU for XGBoost")
+        else:
+            print("Using CPU for XGBoost")
+        _fit_model(model)
+    except Exception as exc:
+        if use_gpu:
+            print(f"GPU training failed ({exc}), falling back to CPU.")
+            model = _build_model("hist", "auto")
+            _fit_model(model)
         else:
             raise
 
