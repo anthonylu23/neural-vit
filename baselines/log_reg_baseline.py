@@ -1,6 +1,7 @@
 import argparse
 from pathlib import Path
 import sys
+import time
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
@@ -68,13 +69,18 @@ def _evaluate(model, X, y) -> dict:
 
 def main() -> None:
     args = _parse_args()
+    total_start = time.perf_counter()
 
     print("Loading train/val/test parquets...")
+    t0 = time.perf_counter()
     train_df, train_specs = load_parquet(args.train)
     val_df, val_specs = load_parquet(args.val)
     test_df, test_specs = load_parquet(args.test)
+    load_time = time.perf_counter() - t0
+    print(f"  Load time: {load_time:.1f}s")
 
     print("Building sequence features...")
+    t0 = time.perf_counter()
     X_train, y_train = build_sequence_features(
         train_df,
         train_specs,
@@ -96,21 +102,27 @@ def main() -> None:
         stride=args.stride,
         feature_mode=args.feature_mode,
     )
+    feature_time = time.perf_counter() - t0
+    print(f"  Feature build time: {feature_time:.1f}s")
 
     print(f"Feature dim: {X_train.shape[1]} | Train sequences: {len(y_train)}")
     print("Scaling features...")
+    t0 = time.perf_counter()
     scaler = StandardScaler()
     X_train_scaled = scaler.fit_transform(X_train)
     X_val_scaled = scaler.transform(X_val)
     X_test_scaled = scaler.transform(X_test)
+    scale_time = time.perf_counter() - t0
+    print(f"  Scale time: {scale_time:.1f}s")
 
     print("Training logistic regression...")
+    t0 = time.perf_counter()
     use_gpu = gpu_available() and CuMLLogisticRegression is not None and cp is not None
     if use_gpu:
-        print("Using GPU via cuML LogisticRegression")
+        print("  Using GPU via cuML LogisticRegression")
         model = CuMLLogisticRegression(max_iter=2000, class_weight="balanced")
     else:
-        print("Using CPU LogisticRegression")
+        print("  Using CPU LogisticRegression")
         model = LogisticRegression(
             max_iter=2000,
             class_weight="balanced",
@@ -118,12 +130,27 @@ def main() -> None:
             n_jobs=-1,
         )
     model.fit(X_train_scaled, y_train)
+    train_time = time.perf_counter() - t0
+    print(f"  Train time: {train_time:.1f}s")
 
     print("Evaluating...")
+    t0 = time.perf_counter()
     metrics = {
         "train": _evaluate(model, X_train_scaled, y_train),
         "val": _evaluate(model, X_val_scaled, y_val),
         "test": _evaluate(model, X_test_scaled, y_test),
+    }
+    eval_time = time.perf_counter() - t0
+    print(f"  Eval time: {eval_time:.1f}s")
+
+    total_time = time.perf_counter() - total_start
+    timing = {
+        "load_time_s": round(load_time, 2),
+        "feature_time_s": round(feature_time, 2),
+        "scale_time_s": round(scale_time, 2),
+        "train_time_s": round(train_time, 2),
+        "eval_time_s": round(eval_time, 2),
+        "total_time_s": round(total_time, 2),
     }
 
     payload = build_run_metadata(
@@ -138,6 +165,7 @@ def main() -> None:
     payload.update(
         {
             "metrics": metrics,
+            "timing": timing,
             "train_class_balance": class_balance(y_train),
             "val_class_balance": class_balance(y_val),
             "test_class_balance": class_balance(y_test),
@@ -148,6 +176,7 @@ def main() -> None:
     print("Saving metrics...")
     output_path = write_metrics(args.output_dir, "log_reg", payload)
     print(f"Metrics written to {output_path}")
+    print(f"\nTotal time: {total_time:.1f}s")
 
 
 if __name__ == "__main__":

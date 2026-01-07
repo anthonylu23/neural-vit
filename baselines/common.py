@@ -8,11 +8,18 @@ import numpy as np
 import pandas as pd
 import pyarrow.dataset as ds
 import pyarrow.fs as pafs
+from joblib import Parallel, delayed
 
 try:
     import gcsfs
 except Exception:
     gcsfs = None
+
+
+def _get_n_jobs() -> int:
+    """Get optimal number of parallel jobs."""
+    n_cpus = os.cpu_count() or 1
+    return max(1, n_cpus - 1)
 
 
 DEFAULT_BUCKET = "lfp_spec_datasets"
@@ -102,6 +109,41 @@ def _sequence_feature(specs: np.ndarray, mode: str) -> np.ndarray:
     raise ValueError(f"Unknown feature mode: {mode}")
 
 
+def _process_session(
+    group: pd.DataFrame,
+    spectrograms: List[np.ndarray],
+    n_trials: int,
+    stride: int,
+    label_map: Dict[str, int],
+    feature_mode: str,
+) -> Tuple[List[np.ndarray], List[int]]:
+    """Process a single session to extract features (for parallel execution)."""
+    features: List[np.ndarray] = []
+    labels: List[int] = []
+
+    group = group.sort_values("trial_num")
+    if group["condition"].nunique() != 1:
+        session_id = group["session"].iloc[0] if len(group) > 0 else "unknown"
+        raise ValueError(f"Session {session_id} has mixed conditions.")
+
+    condition = group["condition"].iloc[0]
+    label = label_map.get(condition, 0)
+    indices = group.index.tolist()
+
+    if len(indices) < n_trials:
+        return features, labels
+
+    for i in range(0, len(indices) - n_trials + 1, stride):
+        seq_indices = indices[i : i + n_trials]
+        if any(spectrograms[idx].size == 0 for idx in seq_indices):
+            continue
+        seq_specs = np.stack([spectrograms[idx] for idx in seq_indices], axis=0)
+        features.append(_sequence_feature(seq_specs, feature_mode))
+        labels.append(label)
+
+    return features, labels
+
+
 def build_sequence_features(
     df: pd.DataFrame,
     spectrograms: List[np.ndarray],
@@ -110,34 +152,59 @@ def build_sequence_features(
     stride: int,
     label_map: Optional[Dict[str, int]] = None,
     feature_mode: str = "trial_time_stats",
+    n_jobs: Optional[int] = None,
 ) -> Tuple[np.ndarray, np.ndarray]:
+    """Build sequence features with optional parallelization.
+    
+    Args:
+        df: DataFrame with session, condition, trial_num columns
+        spectrograms: List of spectrogram arrays corresponding to df rows
+        n_trials: Number of trials per sequence
+        stride: Stride for sliding window
+        label_map: Mapping from condition to label (default: {"FMR1": 1})
+        feature_mode: Feature extraction mode ("trial_stats" or "trial_time_stats")
+        n_jobs: Number of parallel jobs (default: n_cpus - 1, use 1 for serial)
+    
+    Returns:
+        Tuple of (features array, labels array)
+    """
     label_map = label_map or {"FMR1": 1}
-    features: List[np.ndarray] = []
-    labels: List[int] = []
+    n_jobs = n_jobs if n_jobs is not None else _get_n_jobs()
 
-    for session_id, group in df.groupby("session"):
-        group = group.sort_values("trial_num")
-        if group["condition"].nunique() != 1:
-            raise ValueError(f"Session {session_id} has mixed conditions.")
-        condition = group["condition"].iloc[0]
-        label = label_map.get(condition, 0)
-        indices = group.index.tolist()
+    # Group by session
+    session_groups = [(session_id, group) for session_id, group in df.groupby("session")]
+    n_sessions = len(session_groups)
 
-        if len(indices) < n_trials:
-            continue
+    if n_jobs == 1 or n_sessions <= 2:
+        # Serial execution for small workloads
+        all_features: List[np.ndarray] = []
+        all_labels: List[int] = []
+        for _, group in session_groups:
+            feats, labs = _process_session(
+                group, spectrograms, n_trials, stride, label_map, feature_mode
+            )
+            all_features.extend(feats)
+            all_labels.extend(labs)
+    else:
+        # Parallel execution
+        results: List[Tuple[List[np.ndarray], List[int]]] = Parallel(
+            n_jobs=n_jobs, backend="loky", verbose=0
+        )(
+            delayed(_process_session)(
+                group, spectrograms, n_trials, stride, label_map, feature_mode
+            )
+            for _, group in session_groups
+        )  # type: ignore[assignment]
+        all_features = []
+        all_labels = []
+        for feats, labs in results:
+            all_features.extend(feats)
+            all_labels.extend(labs)
 
-        for i in range(0, len(indices) - n_trials + 1, stride):
-            seq_indices = indices[i : i + n_trials]
-            if any(spectrograms[idx].size == 0 for idx in seq_indices):
-                continue
-            seq_specs = np.stack([spectrograms[idx] for idx in seq_indices], axis=0)
-            features.append(_sequence_feature(seq_specs, feature_mode))
-            labels.append(label)
-
-    if not features:
+    if not all_features:
         raise ValueError("No valid sequences generated. Check n_trials/stride and spectrograms.")
 
-    return np.stack(features), np.array(labels)
+    return np.stack(all_features), np.array(all_labels)
 
 
 def class_balance(labels: np.ndarray) -> Dict[str, float]:
