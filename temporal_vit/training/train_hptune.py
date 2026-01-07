@@ -3,9 +3,12 @@
 This script wraps the standard training logic with:
 1. CLI argument parsing for hyperparameters
 2. Metric reporting to Vertex AI HP Tuning via cloudml-hypertune
+3. Early stopping to save cost on poor trials
+4. Learning rate scheduler (warmup + cosine decay)
 """
 
 import argparse
+import math
 import os
 from collections import Counter
 from dataclasses import asdict
@@ -51,15 +54,6 @@ def parse_args() -> argparse.Namespace:
                         help="Weight decay for AdamW")
     parser.add_argument("--label_smoothing", type=float, default=0.05,
                         help="Label smoothing factor")
-    parser.add_argument("--n_layers", type=int, default=None,
-                        help="Number of transformer layers (overrides model_size)")
-    parser.add_argument("--n_heads", type=int, default=None,
-                        help="Number of attention heads (overrides model_size)")
-    parser.add_argument("--embed_dim", type=int, default=None,
-                        help="Embedding dimension (overrides model_size)")
-    parser.add_argument("--model_size", type=str, default="small",
-                        choices=["tiny", "small", "base"],
-                        help="Base model size configuration")
     
     # Training configuration
     parser.add_argument("--epochs", type=int, default=20,
@@ -70,6 +64,16 @@ def parse_args() -> argparse.Namespace:
                         help="Number of trials per sequence")
     parser.add_argument("--stride", type=int, default=4,
                         help="Stride for sequence generation")
+    
+    # Early stopping
+    parser.add_argument("--early_stopping_patience", type=int, default=5,
+                        help="Stop if val_auc doesn't improve for this many epochs (0 to disable)")
+    
+    # Learning rate scheduler
+    parser.add_argument("--warmup_epochs", type=int, default=3,
+                        help="Number of warmup epochs for LR scheduler")
+    parser.add_argument("--min_lr", type=float, default=1e-6,
+                        help="Minimum learning rate after decay")
     
     # Paths (typically from environment in Vertex AI)
     parser.add_argument("--output_dir", type=str, default=None,
@@ -126,16 +130,13 @@ def infer_input_dims(dataset: ParquetSequenceDataset):
 
 
 def build_model(args, freq_size: int, time_size: int) -> Temporal3DViT:
-    """Build model from CLI args, using model_size as base config."""
-    base_config = CONFIGS[args.model_size]
+    """Build model from CLI args, using fixed 'small' model size."""
+    base_config = CONFIGS["small"]  # Fixed to small model
     config_dict = asdict(base_config)
     config_dict.update({
         "n_trials": args.n_trials,
         "freq_size": freq_size,
         "time_size": time_size,
-        "embed_dim": args.embed_dim or base_config.embed_dim,
-        "n_heads": args.n_heads or base_config.n_heads,
-        "n_layers": args.n_layers or base_config.n_layers,
         "dropout": args.dropout,
         "attention_dropout": args.attention_dropout,
         "drop_path": args.drop_path,
@@ -188,6 +189,40 @@ def report_metric(hpt, metric_tag: str, metric_value: float, global_step: int):
         )
 
 
+def create_lr_scheduler(
+    optimizer: torch.optim.Optimizer,
+    warmup_epochs: int,
+    total_epochs: int,
+    min_lr: float,
+) -> torch.optim.lr_scheduler.LambdaLR:
+    """Create LR scheduler with linear warmup and cosine decay.
+    
+    Args:
+        optimizer: The optimizer to schedule
+        warmup_epochs: Number of epochs for linear warmup
+        total_epochs: Total number of training epochs
+        min_lr: Minimum learning rate after decay
+    
+    Returns:
+        LambdaLR scheduler
+    """
+    base_lr = optimizer.param_groups[0]["lr"]
+    
+    def lr_lambda(epoch: int) -> float:
+        if epoch < warmup_epochs:
+            # Linear warmup: scale from 0 to 1
+            return (epoch + 1) / warmup_epochs
+        else:
+            # Cosine decay from 1 to min_lr/base_lr
+            progress = (epoch - warmup_epochs) / max(1, total_epochs - warmup_epochs)
+            cosine_decay = 0.5 * (1 + math.cos(math.pi * progress))
+            # Scale to [min_lr/base_lr, 1]
+            min_scale = min_lr / base_lr
+            return min_scale + (1 - min_scale) * cosine_decay
+    
+    return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+
+
 def train_with_hptune(args: argparse.Namespace):
     """Main training loop with hyperparameter tuning support."""
     
@@ -233,9 +268,10 @@ def train_with_hptune(args: argparse.Namespace):
     print(f"  drop_path: {args.drop_path}")
     print(f"  weight_decay: {args.weight_decay}")
     print(f"  label_smoothing: {args.label_smoothing}")
-    print(f"  model_size: {args.model_size}")
-    print(f"  n_layers: {args.n_layers}")
-    print(f"  n_heads: {args.n_heads}")
+    print(f"  model_size: small (fixed)")
+    print(f"  early_stopping_patience: {args.early_stopping_patience}")
+    print(f"  warmup_epochs: {args.warmup_epochs}")
+    print(f"  min_lr: {args.min_lr}")
     print(f"  epochs: {args.epochs}")
     print(f"  batch_size: {args.batch_size}")
     print("=" * 60)
@@ -294,6 +330,14 @@ def train_with_hptune(args: argparse.Namespace):
         label_smoothing=args.label_smoothing,
     )
     
+    # Learning rate scheduler with warmup + cosine decay
+    scheduler = create_lr_scheduler(
+        optimizer=optimizer,
+        warmup_epochs=args.warmup_epochs,
+        total_epochs=args.epochs,
+        min_lr=args.min_lr,
+    )
+    
     # Experiment logging
     run_id = build_run_id()
     checkpoint_dir = None
@@ -323,13 +367,17 @@ def train_with_hptune(args: argparse.Namespace):
         "drop_path": args.drop_path,
         "weight_decay": args.weight_decay,
         "label_smoothing": args.label_smoothing,
-        "model_size": args.model_size,
-        "n_layers": args.n_layers or CONFIGS[args.model_size].n_layers,
-        "n_heads": args.n_heads or CONFIGS[args.model_size].n_heads,
+        "model_size": "small",
+        "n_layers": CONFIGS["small"].n_layers,
+        "n_heads": CONFIGS["small"].n_heads,
+        "embed_dim": CONFIGS["small"].embed_dim,
         "epochs": args.epochs,
         "batch_size": args.batch_size,
         "n_trials": args.n_trials,
         "stride": args.stride,
+        "early_stopping_patience": args.early_stopping_patience,
+        "warmup_epochs": args.warmup_epochs,
+        "min_lr": args.min_lr,
         "train_sequences": len(train_ds),
         "val_sequences": len(val_ds),
         "test_sequences": len(test_ds),
@@ -337,9 +385,11 @@ def train_with_hptune(args: argparse.Namespace):
     
     # Training loop
     best_val_auc = 0.0
+    epochs_without_improvement = 0
     
     try:
         for epoch in range(1, args.epochs + 1):
+            current_lr = scheduler.get_last_lr()[0]
             model.train()
             running_loss = 0.0
             correct = 0
@@ -392,21 +442,34 @@ def train_with_hptune(args: argparse.Namespace):
             print(
                 f"Epoch {epoch}/{args.epochs} | "
                 f"train loss {train_loss:.4f}, acc {train_acc:.4f}, auc {train_auc:.4f} | "
-                f"val loss {val_loss:.4f}, acc {val_acc:.4f}, auc {val_auc:.4f}"
+                f"val loss {val_loss:.4f}, acc {val_acc:.4f}, auc {val_auc:.4f} | "
+                f"lr {current_lr:.2e}"
             )
             
-            # Checkpoint on best val AUC
-            if checkpoint_dir and val_auc > best_val_auc:
+            # Checkpoint on best val AUC and track early stopping
+            if val_auc > best_val_auc:
                 best_val_auc = val_auc
-                ckpt = {
-                    "model_state": model.state_dict(),
-                    "config": asdict(model.config),
-                    "epoch": epoch,
-                    "val_auc": val_auc,
-                }
-                _save_checkpoint(
-                    ckpt, _checkpoint_path(checkpoint_dir, f"best_epoch_{epoch}.pt")
-                )
+                epochs_without_improvement = 0
+                if checkpoint_dir:
+                    ckpt = {
+                        "model_state": model.state_dict(),
+                        "config": asdict(model.config),
+                        "epoch": epoch,
+                        "val_auc": val_auc,
+                    }
+                    _save_checkpoint(
+                        ckpt, _checkpoint_path(checkpoint_dir, f"best_epoch_{epoch}.pt")
+                    )
+            else:
+                epochs_without_improvement += 1
+            
+            # Step LR scheduler
+            scheduler.step()
+            
+            # Early stopping check
+            if args.early_stopping_patience > 0 and epochs_without_improvement >= args.early_stopping_patience:
+                print(f"Early stopping at epoch {epoch} (no improvement for {args.early_stopping_patience} epochs)")
+                break
         
         # Final test evaluation
         test_loss, test_acc, test_auc = evaluate(model, test_loader, device, criterion)
