@@ -1,6 +1,7 @@
 import argparse
 from pathlib import Path
 import sys
+import time
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
@@ -65,13 +66,18 @@ def main() -> None:
         raise RuntimeError(f"xgboost is required: {_XGB_IMPORT_ERROR}")
 
     args = _parse_args()
+    total_start = time.perf_counter()
 
     print("Loading train/val/test parquets...")
+    t0 = time.perf_counter()
     train_df, train_specs = load_parquet(args.train)
     val_df, val_specs = load_parquet(args.val)
     test_df, test_specs = load_parquet(args.test)
+    load_time = time.perf_counter() - t0
+    print(f"  Load time: {load_time:.1f}s")
 
     print("Building sequence features...")
+    t0 = time.perf_counter()
     X_train, y_train = build_sequence_features(
         train_df,
         train_specs,
@@ -93,6 +99,8 @@ def main() -> None:
         stride=args.stride,
         feature_mode=args.feature_mode,
     )
+    feature_time = time.perf_counter() - t0
+    print(f"  Feature build time: {feature_time:.1f}s")
 
     print(f"Feature dim: {X_train.shape[1]} | Train sequences: {len(y_train)}")
     pos = float(np.sum(y_train == 1))
@@ -100,6 +108,7 @@ def main() -> None:
     scale_pos_weight = neg / max(pos, 1.0)
 
     print("Training XGBoost...")
+    t0 = time.perf_counter()
     use_gpu = gpu_available()
     tree_method = "gpu_hist" if use_gpu else "hist"
     predictor = "gpu_predictor" if use_gpu else "auto"
@@ -140,23 +149,37 @@ def main() -> None:
     model = _build_model(tree_method, predictor)
     try:
         if use_gpu:
-            print("Using GPU for XGBoost")
+            print("  Using GPU for XGBoost")
         else:
-            print("Using CPU for XGBoost")
+            print("  Using CPU for XGBoost")
         _fit_model(model)
     except Exception as exc:
         if use_gpu:
-            print(f"GPU training failed ({exc}), falling back to CPU.")
+            print(f"  GPU training failed ({exc}), falling back to CPU.")
             model = _build_model("hist", "auto")
             _fit_model(model)
         else:
             raise
+    train_time = time.perf_counter() - t0
+    print(f"  Train time: {train_time:.1f}s")
 
     print("Evaluating...")
+    t0 = time.perf_counter()
     metrics = {
         "train": _evaluate(model, X_train, y_train),
         "val": _evaluate(model, X_val, y_val),
         "test": _evaluate(model, X_test, y_test),
+    }
+    eval_time = time.perf_counter() - t0
+    print(f"  Eval time: {eval_time:.1f}s")
+
+    total_time = time.perf_counter() - total_start
+    timing = {
+        "load_time_s": round(load_time, 2),
+        "feature_time_s": round(feature_time, 2),
+        "train_time_s": round(train_time, 2),
+        "eval_time_s": round(eval_time, 2),
+        "total_time_s": round(total_time, 2),
     }
 
     payload = build_run_metadata(
@@ -171,6 +194,7 @@ def main() -> None:
     payload.update(
         {
             "metrics": metrics,
+            "timing": timing,
             "train_class_balance": class_balance(y_train),
             "val_class_balance": class_balance(y_val),
             "test_class_balance": class_balance(y_test),
@@ -190,6 +214,7 @@ def main() -> None:
     print("Saving metrics...")
     output_path = write_metrics(args.output_dir, "xgboost", payload)
     print(f"Metrics written to {output_path}")
+    print(f"\nTotal time: {total_time:.1f}s")
 
 
 if __name__ == "__main__":

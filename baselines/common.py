@@ -111,33 +111,42 @@ def _sequence_feature(specs: np.ndarray, mode: str) -> np.ndarray:
 
 def _process_session(
     group: pd.DataFrame,
-    spectrograms: List[np.ndarray],
+    session_spectrograms: List[np.ndarray],
     n_trials: int,
     stride: int,
     label_map: Dict[str, int],
     feature_mode: str,
 ) -> Tuple[List[np.ndarray], List[int]]:
-    """Process a single session to extract features (for parallel execution)."""
+    """Process a single session to extract features (for parallel execution).
+    
+    Args:
+        group: DataFrame for this session (with reset index starting at 0)
+        session_spectrograms: Spectrograms for this session only (not full list)
+        n_trials: Number of trials per sequence
+        stride: Stride for sliding window
+        label_map: Mapping from condition to label
+        feature_mode: Feature extraction mode
+    """
     features: List[np.ndarray] = []
     labels: List[int] = []
 
-    group = group.sort_values("trial_num")
+    group = group.sort_values("trial_num").reset_index(drop=True)
     if group["condition"].nunique() != 1:
         session_id = group["session"].iloc[0] if len(group) > 0 else "unknown"
         raise ValueError(f"Session {session_id} has mixed conditions.")
 
     condition = group["condition"].iloc[0]
     label = label_map.get(condition, 0)
-    indices = group.index.tolist()
+    n_rows = len(group)
 
-    if len(indices) < n_trials:
+    if n_rows < n_trials:
         return features, labels
 
-    for i in range(0, len(indices) - n_trials + 1, stride):
-        seq_indices = indices[i : i + n_trials]
-        if any(spectrograms[idx].size == 0 for idx in seq_indices):
+    for i in range(0, n_rows - n_trials + 1, stride):
+        seq_indices = list(range(i, i + n_trials))
+        if any(session_spectrograms[idx].size == 0 for idx in seq_indices):
             continue
-        seq_specs = np.stack([spectrograms[idx] for idx in seq_indices], axis=0)
+        seq_specs = np.stack([session_spectrograms[idx] for idx in seq_indices], axis=0)
         features.append(_sequence_feature(seq_specs, feature_mode))
         labels.append(label)
 
@@ -171,29 +180,34 @@ def build_sequence_features(
     label_map = label_map or {"FMR1": 1}
     n_jobs = n_jobs if n_jobs is not None else _get_n_jobs()
 
-    # Group by session
-    session_groups = [(session_id, group) for session_id, group in df.groupby("session")]
-    n_sessions = len(session_groups)
+    # Pre-extract session groups with their spectrograms to avoid passing full list
+    session_data: List[Tuple[pd.DataFrame, List[np.ndarray]]] = []
+    for _, group in df.groupby("session"):
+        indices = group.index.tolist()
+        session_specs = [spectrograms[idx] for idx in indices]
+        session_data.append((group.copy(), session_specs))
+
+    n_sessions = len(session_data)
 
     if n_jobs == 1 or n_sessions <= 2:
         # Serial execution for small workloads
         all_features: List[np.ndarray] = []
         all_labels: List[int] = []
-        for _, group in session_groups:
+        for group, session_specs in session_data:
             feats, labs = _process_session(
-                group, spectrograms, n_trials, stride, label_map, feature_mode
+                group, session_specs, n_trials, stride, label_map, feature_mode
             )
             all_features.extend(feats)
             all_labels.extend(labs)
     else:
-        # Parallel execution
+        # Parallel execution - each worker gets only its session's spectrograms
         results: List[Tuple[List[np.ndarray], List[int]]] = Parallel(
             n_jobs=n_jobs, backend="loky", verbose=0
         )(
             delayed(_process_session)(
-                group, spectrograms, n_trials, stride, label_map, feature_mode
+                group, session_specs, n_trials, stride, label_map, feature_mode
             )
-            for _, group in session_groups
+            for group, session_specs in session_data
         )  # type: ignore[assignment]
         all_features = []
         all_labels = []
