@@ -1,9 +1,8 @@
 import argparse
-import csv
 import json
 import os
-import sys
-from typing import Any, Dict, List, Optional
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
 
 try:
     from google.cloud import aiplatform
@@ -16,94 +15,126 @@ except Exception:
     gcsfs = None
 
 
-def _to_float(value: str) -> Optional[float]:
-    if value is None:
-        return None
-    stripped = value.strip()
-    if not stripped:
-        return None
-    try:
-        return float(stripped)
-    except ValueError:
-        return None
-
-
-def _read_csv_metrics(path: str) -> Dict[str, Any]:
-    rows: List[Dict[str, str]] = []
-    with open(path, "r", encoding="utf-8") as handle:
-        reader = csv.DictReader(handle)
-        for row in reader:
-            rows.append(row)
-
-    train_rows = []
-    test_row = None
-    for row in rows:
-        epoch = (row.get("epoch") or "").strip()
-        if epoch.lower() == "test":
-            test_row = row
-            continue
-        if epoch.isdigit():
-            train_rows.append(row)
-
-    summary: Dict[str, Any] = {"row_count": len(rows)}
-    if train_rows:
-        def _row_metric(row: Dict[str, str], key: str) -> float:
-            return _to_float(row.get(key, "")) or float("-inf")
-
-        best_val_auc_row = max(train_rows, key=lambda r: _row_metric(r, "val_auc"))
-        best_val_acc_row = max(train_rows, key=lambda r: _row_metric(r, "val_acc"))
-        last_row = train_rows[-1]
-        summary.update(
-            {
-                "best_val_auc": _to_float(best_val_auc_row.get("val_auc", "")),
-                "best_val_auc_epoch": best_val_auc_row.get("epoch"),
-                "best_val_acc": _to_float(best_val_acc_row.get("val_acc", "")),
-                "best_val_acc_epoch": best_val_acc_row.get("epoch"),
-                "last_epoch": last_row.get("epoch"),
-                "last_train_loss": _to_float(last_row.get("train_loss", "")),
-                "last_train_acc": _to_float(last_row.get("train_acc", "")),
-                "last_val_loss": _to_float(last_row.get("val_loss", "")),
-                "last_val_acc": _to_float(last_row.get("val_acc", "")),
-                "last_val_auc": _to_float(last_row.get("val_auc", "")),
-            }
-        )
-
-    if test_row:
-        summary["test_loss"] = _to_float(test_row.get("test_loss", ""))
-        summary["test_acc"] = _to_float(test_row.get("test_acc", ""))
-        summary["test_auc"] = _to_float(test_row.get("test_auc", ""))
-
-    return summary
-
-
 def _resolve_project(project: Optional[str]) -> Optional[str]:
     return project or os.environ.get("AIP_PROJECT_ID") or os.environ.get("GOOGLE_CLOUD_PROJECT")
 
 
-def _resolve_location(location: Optional[str]) -> Optional[str]:
+def _resolve_location(location: Optional[str]) -> str:
     return location or os.environ.get("AIP_LOCATION") or "us-central1"
 
 
-def _resolve_experiment(experiment: Optional[str]) -> Optional[str]:
-    return experiment or os.environ.get("AIP_EXPERIMENT_NAME")
+def _resolve_experiment(experiment: Optional[str]) -> str:
+    return experiment or os.environ.get("AIP_EXPERIMENT_NAME") or "lfp-temporal-vit-experiments"
 
 
-def _resolve_experiment_prefix(prefix: Optional[str]) -> str:
-    return prefix or os.environ.get("LFP_EXPERIMENT_PREFIX") or "lfp-temporal-experiments"
+def _normalize_gcs_root(path: str) -> str:
+    return path.replace("gs://", "", 1).rstrip("/")
 
 
-def _call_noarg(obj: Any, name: str) -> Optional[Any]:
-    if not hasattr(obj, name):
+def _list_metrics_files(metrics_root: str) -> List[str]:
+    if metrics_root.startswith("gs://"):
+        if gcsfs is None:
+            raise RuntimeError("gcsfs is required to read metrics from GCS")
+        fs = gcsfs.GCSFileSystem()
+        root = _normalize_gcs_root(metrics_root)
+        patterns = [f"{root}/**/metrics/*.jsonl", f"{root}/*/metrics/*.jsonl"]
+        candidates: List[str] = []
+        for pattern in patterns:
+            try:
+                candidates.extend(fs.glob(pattern))
+            except Exception:
+                continue
+        if not candidates:
+            try:
+                candidates = fs.find(root)
+            except Exception:
+                candidates = []
+        files = [
+            f"gs://{path}" for path in candidates
+            if "/metrics/" in path and path.endswith(".jsonl")
+        ]
+        return sorted(set(files))
+
+    root = Path(metrics_root)
+    if not root.exists():
+        return []
+    files = [str(path) for path in root.rglob("metrics/*.jsonl")]
+    return sorted(files)
+
+
+def _parse_run_id(path: str) -> Optional[str]:
+    normalized = path.replace("gs://", "", 1)
+    parts = normalized.split("/")
+    metric_indices = [idx for idx, part in enumerate(parts) if part == "metrics"]
+    if not metric_indices:
         return None
-    value = getattr(obj, name)
-    if callable(value):
-        try:
-            return value()
-        except TypeError:
-            return None
-        except Exception:
-            return None
-    return value
+    idx = metric_indices[-1]
+    if idx == 0:
+        return None
+    return parts[idx - 1]
+
+
+def _open_metrics(path: str) -> List[Dict[str, Any]]:
+    metrics: List[Dict[str, Any]] = []
+    if path.startswith("gs://"):
+        if gcsfs is None:
+            raise RuntimeError("gcsfs is required to read metrics from GCS")
+        fs = gcsfs.GCSFileSystem()
+        with fs.open(path, "r") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line:
+                    continue
+                metrics.append(json.loads(line))
+        return metrics
+
+    with open(path, "r", encoding="utf-8") as handle:
+        for line in handle:
+            line = line.strip()
+            if not line:
+                continue
+            metrics.append(json.loads(line))
+    return metrics
+
+
+def _metric_value(record: Dict[str, Any], key: str) -> Optional[float]:
+    value = record.get(key)
+    if isinstance(value, (int, float)):
+        return float(value)
+    return None
+
+
+def _summarize_metrics(records: List[Dict[str, Any]]) -> Dict[str, Any]:
+    if not records:
+        return {}
+    records_sorted = sorted(records, key=lambda r: r.get("step", 0))
+    best_val_auc = None
+    best_val_auc_step = None
+    for record in records_sorted:
+        val_auc = _metric_value(record, "val/auc")
+        if val_auc is None:
+            continue
+        if best_val_auc is None or val_auc > best_val_auc:
+            best_val_auc = val_auc
+            best_val_auc_step = record.get("step")
+
+    last = records_sorted[-1]
+    summary = {
+        "steps": len(records_sorted),
+        "best_val_auc": best_val_auc,
+        "best_val_auc_step": best_val_auc_step,
+        "last_step": last.get("step"),
+        "last_train_loss": _metric_value(last, "train/loss"),
+        "last_train_acc": _metric_value(last, "train/acc"),
+        "last_train_auc": _metric_value(last, "train/auc"),
+        "last_val_loss": _metric_value(last, "val/loss"),
+        "last_val_acc": _metric_value(last, "val/acc"),
+        "last_val_auc": _metric_value(last, "val/auc"),
+        "last_test_loss": _metric_value(last, "test/loss"),
+        "last_test_acc": _metric_value(last, "test/acc"),
+        "last_test_auc": _metric_value(last, "test/auc"),
+    }
+    return summary
 
 
 def _resource_to_dict(resource: Any) -> Optional[Dict[str, Any]]:
@@ -119,7 +150,14 @@ def _resource_to_dict(resource: Any) -> Optional[Dict[str, Any]]:
 
         return MessageToDict(resource)
     except Exception:
-    return None
+        return None
+
+
+def _parse_resource_name(value: Optional[str]) -> Optional[str]:
+    if not value:
+        return None
+    parts = value.split("/")
+    return parts[-1] if parts else value
 
 
 def _unwrap_value(value: Any) -> Any:
@@ -168,383 +206,216 @@ def _normalize_kv_collection(value: Any, name_keys: List[str], value_keys: List[
         return value
     if isinstance(value, list):
         result: Dict[str, Any] = {}
-        leftovers = []
         for item in value:
+            name = None
+            val = None
             if isinstance(item, dict):
                 name = next((item.get(k) for k in name_keys if item.get(k) is not None), None)
                 val = next((item.get(k) for k in value_keys if item.get(k) is not None), None)
-                if name is not None:
-                    result[str(name)] = _unwrap_value(val)
-                else:
-                    leftovers.append(item)
             else:
-                name = None
                 for key in name_keys:
                     if hasattr(item, key):
                         name = getattr(item, key)
                         break
-                val = None
                 for key in value_keys:
                     if hasattr(item, key):
                         val = getattr(item, key)
                         break
-                if name is not None:
-                    result[str(name)] = _unwrap_value(val)
-                else:
-                    leftovers.append(item)
-        if result:
-            if leftovers:
-                result["_raw"] = leftovers
-            return result
-        return value
+            if name is not None:
+                result[str(name)] = _unwrap_value(val)
+        return result or value
     return value
 
 
-def _extract_metrics_params(run_obj: Any) -> Dict[str, Any]:
-    metrics = None
+def _extract_params(run_obj: Any) -> Any:
     params = None
-
-    for name in ("get_metrics", "list_metrics", "metrics", "metric_values"):
-        metrics = _call_noarg(run_obj, name)
-        if metrics is not None:
-            break
-
     for name in ("get_params", "list_params", "parameters", "params", "hyperparameters"):
-        params = _call_noarg(run_obj, name)
+        if hasattr(run_obj, name):
+            value = getattr(run_obj, name)
+            if callable(value):
+                try:
+                    params = value()
+                except Exception:
+                    params = None
+            else:
+                params = value
         if params is not None:
             break
 
-    metrics = _normalize_kv_collection(
-        metrics,
-        name_keys=["name", "metric_id", "metric", "metric_name", "display_name"],
-        value_keys=["value", "metric_value", "double_value", "float_value", "int_value", "number_value"],
-    )
     params = _normalize_kv_collection(
         params,
         name_keys=["name", "parameter_id", "parameter", "param", "display_name"],
         value_keys=["value", "string_value", "double_value", "float_value", "int_value", "number_value", "bool_value"],
     )
 
-    if metrics is None or params is None:
+    if params is None:
         resource_dict = _resource_to_dict(getattr(run_obj, "_gca_resource", None))
         if resource_dict:
             metadata = resource_dict.get("metadata") or {}
-            if metrics is None:
-                for key in ("metrics", "metric_values", "metricValues"):
-                    if key in resource_dict:
-                        metrics = resource_dict[key]
-                        break
-                    if key in metadata:
-                        metrics = metadata[key]
-                        break
-            if params is None:
-                for key in ("parameters", "params", "hyperparameters"):
-                    if key in resource_dict:
-                        params = resource_dict[key]
-                        break
-                    if key in metadata:
-                        params = metadata[key]
-                        break
-
-    metrics = _normalize_kv_collection(
-        metrics,
-        name_keys=["name", "metric_id", "metric", "metric_name", "display_name"],
-        value_keys=["value", "metric_value", "double_value", "float_value", "int_value", "number_value"],
-    )
+            for key in ("parameters", "params", "hyperparameters"):
+                if key in metadata:
+                    params = metadata[key]
+                    break
     params = _normalize_kv_collection(
         params,
         name_keys=["name", "parameter_id", "parameter", "param", "display_name"],
         value_keys=["value", "string_value", "double_value", "float_value", "int_value", "number_value", "bool_value"],
     )
+    return params
 
-    return {"metrics": metrics, "params": params}
 
-
-def _serialize_run(run_obj: Any, run_id: Optional[str]) -> Dict[str, Any]:
-    data: Dict[str, Any] = {"run_id": run_id}
-    for attr in (
-        "name",
-        "display_name",
-        "resource_name",
-        "state",
-        "create_time",
-        "update_time",
+def _call_list_method(method: Any, experiment: str) -> Optional[List[Any]]:
+    for kwargs in (
+        {"experiment": experiment},
+        {"experiment_name": experiment},
+        {"experiment_id": experiment},
+        {},
     ):
-        if hasattr(run_obj, attr):
-            data[attr] = getattr(run_obj, attr)
+        try:
+            result = method(**kwargs)
+            if result is None:
+                continue
+            return list(result)
+        except TypeError:
+            continue
+    return None
 
-    metrics_params = _extract_metrics_params(run_obj)
-    data.update(metrics_params)
-    return data
 
-
-def _fetch_experiment_run(
-    project: Optional[str],
-    location: Optional[str],
-    experiment: Optional[str],
-    run_id: Optional[str],
-) -> Dict[str, Any]:
-    if not run_id:
-        return {"status": "skipped", "reason": "run_id_not_provided"}
+def _load_experiment_runs(project: str, location: str, experiment: str) -> Tuple[List[Any], List[str]]:
     if aiplatform is None:
-        return {"status": "unavailable", "reason": "google-cloud-aiplatform_not_installed"}
-    if not project or not location or not experiment:
-        return {"status": "skipped", "reason": "missing_project_location_or_experiment"}
+        raise RuntimeError("google-cloud-aiplatform is required to read experiment runs")
 
-    try:
-        aiplatform.init(project=project, location=location, experiment=experiment)
-    except Exception as exc:
-        return {"status": "error", "error": f"init_failed: {exc}"}
+    aiplatform.init(project=project, location=location, experiment=experiment)
 
-    run_obj = None
-    errors = []
-    if hasattr(aiplatform, "Experiment"):
+    errors: List[str] = []
+    runs: Optional[List[Any]] = None
+
+    if hasattr(aiplatform, "ExperimentRun"):
+        for name in ("list", "list_experiment_runs", "list_runs"):
+            method = getattr(aiplatform.ExperimentRun, name, None)
+            if method is None:
+                continue
+            try:
+                runs = _call_list_method(method, experiment)
+            except Exception as exc:
+                errors.append(f"ExperimentRun.{name}: {exc}")
+            if runs:
+                break
+
+    if not runs and hasattr(aiplatform, "Experiment"):
         try:
             exp = aiplatform.Experiment(experiment)
-            if hasattr(exp, "list_runs"):
-                runs = exp.list_runs()
-            elif hasattr(aiplatform, "ExperimentRun") and hasattr(aiplatform.ExperimentRun, "list"):
-                runs = aiplatform.ExperimentRun.list(experiment=experiment)
-            elif hasattr(aiplatform, "ExperimentRun") and hasattr(aiplatform.ExperimentRun, "list_experiment_runs"):
-                runs = aiplatform.ExperimentRun.list_experiment_runs(experiment=experiment)
-            else:
-                runs = []
-            for candidate in runs:
-                name = getattr(candidate, "name", "") or ""
-                display = getattr(candidate, "display_name", "") or ""
-                resource = getattr(candidate, "resource_name", "") or ""
-                if run_id in (name, display) or run_id in resource:
-                    run_obj = candidate
-                    break
         except Exception as exc:
-            errors.append(f"list_runs_failed: {exc}")
-
-    if run_obj is None and hasattr(aiplatform, "ExperimentRun"):
-        for attr in ("get", "from_resource_name"):
-            if hasattr(aiplatform.ExperimentRun, attr):
+            errors.append(f"Experiment init: {exc}")
+            exp = None
+        if exp is not None:
+            for name in ("list_runs", "get_experiment_runs", "list_experiment_runs"):
+                method = getattr(exp, name, None)
+                if method is None:
+                    continue
                 try:
-                    run_obj = getattr(aiplatform.ExperimentRun, attr)(run_id)
-                    if run_obj is not None:
-                        break
+                    runs = list(method())
                 except Exception as exc:
-                    errors.append(f"experiment_run_{attr}_failed: {exc}")
-        if run_obj is None:
-            try:
-                run_obj = aiplatform.ExperimentRun(run_id)
-            except Exception as exc:
-                errors.append(f"experiment_run_failed: {exc}")
+                    errors.append(f"Experiment.{name}: {exc}")
+                if runs:
+                    break
 
-    if run_obj is None:
-        return {"status": "not_found", "errors": errors}
-
-    data = {"status": "found"}
-    data.update(_serialize_run(run_obj, run_id))
-    return data
+    return runs or [], errors
 
 
-def _list_experiment_runs(
-    project: Optional[str],
-    location: Optional[str],
-    experiment: Optional[str],
-) -> Dict[str, Any]:
-    if aiplatform is None:
-        return {"status": "unavailable", "reason": "google-cloud-aiplatform_not_installed"}
-    if not project or not location or not experiment:
-        return {"status": "skipped", "reason": "missing_project_location_or_experiment"}
-
-    try:
-        aiplatform.init(project=project, location=location, experiment=experiment)
-        exp = aiplatform.Experiment(experiment)
-        if hasattr(exp, "list_runs"):
-            runs = exp.list_runs()
-        elif hasattr(aiplatform, "ExperimentRun") and hasattr(aiplatform.ExperimentRun, "list"):
-            runs = aiplatform.ExperimentRun.list(experiment=experiment)
-        elif hasattr(aiplatform, "ExperimentRun") and hasattr(aiplatform.ExperimentRun, "list_experiment_runs"):
-            runs = aiplatform.ExperimentRun.list_experiment_runs(experiment=experiment)
-        else:
-            return {"status": "error", "error": "Experiment run listing not supported in this SDK version."}
-    except Exception as exc:
-        return {"status": "error", "error": str(exc)}
-
-    serialized = []
+def _match_run_params(run_id: Optional[str], runs: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    if not run_id:
+        return None
     for run in runs:
-        run_id = getattr(run, "display_name", None) or getattr(run, "name", None)
-        serialized.append(_serialize_run(run, run_id))
-
-    return {"status": "ok", "runs": serialized}
-
-
-def _list_experiments(
-    project: Optional[str],
-    location: Optional[str],
-    prefix: Optional[str],
-) -> Dict[str, Any]:
-    if aiplatform is None:
-        return {"status": "unavailable", "reason": "google-cloud-aiplatform_not_installed"}
-    if not project or not location:
-        return {"status": "skipped", "reason": "missing_project_or_location"}
-
-    try:
-        aiplatform.init(project=project, location=location)
-        experiments = aiplatform.Experiment.list()
-    except Exception as exc:
-        return {"status": "error", "error": str(exc)}
-
-    filtered = []
-    for experiment in experiments:
-        name = getattr(experiment, "name", None)
-        display_name = getattr(experiment, "display_name", None)
-        resource_name = getattr(experiment, "resource_name", None)
-        label = display_name or name or resource_name
-        if prefix and label and prefix not in label:
-            continue
-        filtered.append(
-            {
-                "name": name,
-                "display_name": display_name,
-                "resource_name": resource_name,
-                "runs": _list_experiment_runs(project, location, display_name or name),
-            }
-        )
-
-    return {"status": "ok", "experiments": filtered}
-
-
-def _list_paths(base_path: str) -> Dict[str, Any]:
-    base = base_path.rstrip("/")
-    if base.startswith("gs://"):
-        if gcsfs is None:
-            return {"status": "unavailable", "reason": "gcsfs_not_installed"}
-        fs = gcsfs.GCSFileSystem()
-        try:
-            entries = fs.ls(base)
-        except Exception as exc:
-            return {"status": "error", "error": str(exc)}
-        return {"status": "ok", "entries": entries}
-
-    if not os.path.exists(base):
-        return {"status": "missing", "entries": []}
-    try:
-        entries = [os.path.join(base, name) for name in os.listdir(base)]
-    except Exception as exc:
-        return {"status": "error", "error": str(exc)}
-    return {"status": "ok", "entries": entries}
-
-
-def _resolve_tb_log_dir(tb_log_dir: Optional[str]) -> Optional[str]:
-    return tb_log_dir or os.environ.get("AIP_TENSORBOARD_LOG_DIR")
-
-
-def _tensorboard_details(tb_log_dir: Optional[str], run_id: Optional[str]) -> Dict[str, Any]:
-    if not tb_log_dir:
-        return {"status": "skipped", "reason": "tensorboard_log_dir_not_set"}
-    target = tb_log_dir.rstrip("/")
-    if run_id:
-        target = f"{target}/{run_id}"
-    details = _list_paths(target)
-    details["path"] = target
-    return details
-
-
-def _checkpoint_details(checkpoint_root: Optional[str], run_id: Optional[str]) -> Dict[str, Any]:
-    if not checkpoint_root:
-        return {"status": "skipped", "reason": "checkpoint_root_not_set"}
-    target = checkpoint_root.rstrip("/")
-    if run_id:
-        target = f"{target}/{run_id}/checkpoints"
-    details = _list_paths(target)
-    details["path"] = target
-    return details
+        if run_id == run.get("run_id") or run_id == run.get("display_name"):
+            return run.get("params")
+    for run in runs:
+        for candidate in (
+            run.get("resource_name"),
+            run.get("name"),
+            run.get("display_name"),
+        ):
+            if candidate and run_id in candidate:
+                return run.get("params")
+    return None
 
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Summarize CSV runs and fetch experiment/tensorboard/checkpoint details."
+        description="Collect metrics JSONL from GCS and attach experiment parameters."
     )
     parser.add_argument(
-        "--csvs",
-        nargs="+",
-        default=[
-            "evals/no_class_weights.csv",
-            "evals/class_weighted_incr_dropout.csv",
-        ],
-        help="CSV files to summarize.",
-    )
-    parser.add_argument(
-        "--run-ids",
-        nargs="*",
-        default=[],
-        help="Run IDs aligned with --csvs (optional).",
+        "--metrics-root",
+        default="gs://lfp-temporal-vit/vertex-runs",
+        help="Root path to search for metrics jsonl files.",
     )
     parser.add_argument("--project", default=None, help="GCP project id.")
     parser.add_argument("--location", default=None, help="GCP location (e.g., us-central1).")
     parser.add_argument("--experiment", default=None, help="Vertex experiment name.")
-    parser.add_argument("--tensorboard-log-dir", default=None, help="TensorBoard log dir.")
-    parser.add_argument(
-        "--checkpoint-root",
-        default="gs://lfp-temporal-vit/vertex-runs",
-        help="Root path for checkpoints.",
-    )
-    parser.add_argument(
-        "--all-experiments",
-        action="store_true",
-        help="Fetch all experiments matching the prefix.",
-    )
-    parser.add_argument(
-        "--experiment-prefix",
-        default=None,
-        help="Prefix for experiment listing (default: lfp-temporal).",
-    )
-    parser.add_argument("--output", default=None, help="Optional JSON output path.")
+    parser.add_argument("--output", default="evals/run_details.json", help="Output JSON path.")
     return parser.parse_args()
 
 
 def main() -> None:
     args = _parse_args()
-    no_args = len(sys.argv) == 1
     project = _resolve_project(args.project)
     location = _resolve_location(args.location)
-    experiment = _resolve_experiment(args.experiment) or "lfp-temporal-vit-experiments"
-    tb_log_dir = _resolve_tb_log_dir(args.tensorboard_log_dir)
-    all_experiments = args.all_experiments or no_args
-    experiment_prefix = _resolve_experiment_prefix(args.experiment_prefix)
+    experiment = _resolve_experiment(args.experiment)
 
-    results = []
-    if not all_experiments and args.csvs:
-        run_ids = list(args.run_ids)
-        while len(run_ids) < len(args.csvs):
-            run_ids.append(None)
+    metrics_files = _list_metrics_files(args.metrics_root)
+    metrics_by_run: Dict[str, Dict[str, Any]] = {}
+    for path in metrics_files:
+        run_id = _parse_run_id(path) or "unknown"
+        record = metrics_by_run.setdefault(
+            run_id,
+            {"run_id": run_id, "metrics_files": [], "metrics": [], "summary": {}},
+        )
+        record["metrics_files"].append(path)
+        record["metrics"].extend(_open_metrics(path))
 
-        for csv_path, run_id in zip(args.csvs, run_ids):
-            summary = _read_csv_metrics(csv_path)
-            result = {
-                "csv": csv_path,
-                "run_id": run_id,
-                "csv_summary": summary,
-                "experiment": _fetch_experiment_run(project, location, experiment, run_id),
-                "tensorboard": _tensorboard_details(tb_log_dir, run_id),
-                "checkpoints": _checkpoint_details(args.checkpoint_root, run_id),
-            }
-            results.append(result)
+    for record in metrics_by_run.values():
+        record["summary"] = _summarize_metrics(record["metrics"])
+
+    run_params = []
+    if project and location and experiment:
+        try:
+            run_objects, errors = _load_experiment_runs(project, location, experiment)
+            for run in run_objects:
+                run_id = getattr(run, "display_name", None) or _parse_resource_name(
+                    getattr(run, "resource_name", None)
+                )
+                run_params.append(
+                    {
+                        "run_id": run_id,
+                        "name": getattr(run, "name", None),
+                        "display_name": getattr(run, "display_name", None),
+                        "resource_name": getattr(run, "resource_name", None),
+                        "params": _extract_params(run),
+                    }
+                )
+            if errors:
+                run_params.append({"errors": errors})
+        except Exception as exc:
+            run_params = [{"error": str(exc)}]
+
+    runs = []
+    for record in metrics_by_run.values():
+        params = _match_run_params(record.get("run_id"), run_params)
+        runs.append({**record, "params": params})
 
     payload = {
+        "metrics_root": args.metrics_root,
         "project": project,
         "location": location,
         "experiment": experiment,
-        "runs": results,
-        "experiment_runs": _list_experiment_runs(project, location, experiment),
-        "experiments": _list_experiments(project, location, experiment_prefix)
-        if all_experiments
-        else None,
+        "runs": runs,
+        "experiment_runs": run_params,
     }
-    output = json.dumps(payload, indent=2, sort_keys=True)
 
-    if args.output:
-        with open(args.output, "w", encoding="utf-8") as handle:
-            handle.write(output)
-        print(f"Wrote summary to {args.output}")
-    else:
-        print(output)
+    output_path = Path(args.output)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    print(f"Wrote summary to {output_path}")
 
 
 if __name__ == "__main__":
