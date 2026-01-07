@@ -6,8 +6,10 @@ from typing import Any, Dict, Optional
 
 try:
     from google.cloud import aiplatform
+    from google.api_core.exceptions import AlreadyExists
 except Exception:
     aiplatform = None
+    AlreadyExists = None
 
 try:
     from torch.utils.tensorboard import SummaryWriter
@@ -98,9 +100,25 @@ class ExperimentLogger:
             location_resolved = _resolve_location(location)
             experiment = _resolve_experiment_name(experiment_name)
             if project and location_resolved and experiment:
-                aiplatform.init(project=project, location=location_resolved, experiment=experiment)
-                aiplatform.start_run(run_id)
-                self._vertex_active = True
+                try:
+                    aiplatform.init(project=project, location=location_resolved, experiment=experiment)
+                    aiplatform.start_run(run_id)
+                    self._vertex_active = True
+                except AlreadyExists:
+                    # Race condition: another parallel trial already created the experiment
+                    # Just initialize without setting experiment, then start run
+                    print(f"Experiment '{experiment}' already exists, connecting to it...")
+                    aiplatform.init(project=project, location=location_resolved)
+                    try:
+                        aiplatform.init(project=project, location=location_resolved, experiment=experiment)
+                        aiplatform.start_run(run_id)
+                        self._vertex_active = True
+                    except Exception as e:
+                        print(f"Failed to connect to experiment after retry: {e}")
+                        self._vertex_active = False
+                except Exception as e:
+                    print(f"Vertex AI experiment initialization failed: {e}")
+                    self._vertex_active = False
 
     def log_params(self, params: Dict[str, Any]) -> None:
         if self._vertex_active:

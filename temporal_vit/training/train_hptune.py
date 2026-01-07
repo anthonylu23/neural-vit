@@ -338,6 +338,10 @@ def train_with_hptune(args: argparse.Namespace):
         min_lr=args.min_lr,
     )
     
+    # Automatic mixed precision for memory efficiency
+    use_amp = torch.cuda.is_available()
+    scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
+    
     # Experiment logging
     run_id = build_run_id()
     checkpoint_dir = None
@@ -402,10 +406,16 @@ def train_with_hptune(args: argparse.Namespace):
                 labels = labels.to(device, non_blocking=True)
                 
                 optimizer.zero_grad()
-                logits = model(specs)
-                loss = criterion(logits, labels)
-                loss.backward()
-                optimizer.step()
+                
+                # Forward pass with automatic mixed precision
+                with torch.cuda.amp.autocast(enabled=use_amp):
+                    logits = model(specs)
+                    loss = criterion(logits, labels)
+                
+                # Backward pass with gradient scaling
+                scaler.scale(loss).backward()
+                scaler.step(optimizer)
+                scaler.update()
                 
                 running_loss += loss.item() * labels.size(0)
                 preds = torch.argmax(logits, dim=1)
