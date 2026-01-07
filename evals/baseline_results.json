@@ -1,0 +1,67 @@
+{
+  "source_bucket": "gs://lfp-baselines",
+  "baselines": [
+    {
+      "name": "LogReg (no reg) [0727]",
+      "model_type": "log_reg",
+      "source_path": "gs://lfp-baselines/log_reg/log_reg_20260107-072719.json",
+      "timestamp": "20260107-072719",
+      "feature_mode": "trial_stats",
+      "n_trials": 8,
+      "stride": 4,
+      "regularization_C": null,
+      "feature_dim": 62464,
+      "train": {
+        "acc": 1.0,
+        "auc": 1.0
+      },
+      "val": {
+        "acc": 0.792981212336051,
+        "auc": 0.9953020134228189
+      },
+      "test": {
+        "acc": 0.5082146768893757,
+        "auc": 0.8820238299072385
+      },
+      "timing": {
+        "load_time_s": 76.84,
+        "feature_time_s": 149.46,
+        "scale_time_s": 15.54,
+        "train_time_s": 82.8,
+        "eval_time_s": 4.8,
+        "total_time_s": 329.44
+      }
+    },
+    {
+      "name": "LogReg (C=0.1) [2250]",
+      "model_type": "log_reg",
+      "source_path": "gs://lfp-baselines/log_reg/log_reg_20260107-225054.json",
+      "timestamp": "20260107-225054",
+      "feature_mode": "trial_stats",
+      "n_trials": 8,
+      "stride": 4,
+      "regularization_C": 0.1,
+      "feature_dim": 62464,
+      "train": {
+        "acc": 1.0,
+        "auc": 1.0
+      },
+      "val": {
+        "acc": 0.8791208791208791,
+        "auc": 0.9972810774904368
+      },
+      "test": {
+        "acc": 0.529390288426433,
+        "auc": 0.8478219706507397
+      },
+      "timing": {
+        "load_time_s": 52.78,
+        "feature_time_s": 125.13,
+        "scale_time_s": 13.54,
+        "train_time_s": 172.17,
+        "eval_time_s": 3.89,
+        "total_time_s": 367.51
+      }
+    }
+  ]
+}
