@@ -7,4 +7,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-ENTRYPOINT ["python", "-m", "temporal_vit.training.train"]
+# No hardcoded entrypoint - command specified in Vertex AI job config
+# Default to standard training if no command specified
+CMD ["python", "-m", "temporal_vit.training.train"]

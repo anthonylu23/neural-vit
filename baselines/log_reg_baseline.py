@@ -44,6 +44,12 @@ def _parse_args() -> argparse.Namespace:
         default="trial_stats",
     )
     parser.add_argument(
+        "-C", "--regularization",
+        type=float,
+        default=0.1,
+        help="Inverse regularization strength. Smaller values = stronger regularization. Try 0.01, 0.1, 1.0",
+    )
+    parser.add_argument(
         "--output-dir",
         default="gs://lfp-baselines/log_reg",
         help="GCS or local output directory for metrics JSON.",
@@ -119,10 +125,12 @@ def main() -> None:
     t0 = time.perf_counter()
     use_gpu = gpu_available() and CuMLLogisticRegression is not None and cp is not None
     print(f"  GPU available: {gpu_available()}, cuML available: {CuMLLogisticRegression is not None}")
+    print(f"  Regularization C={args.regularization}")
     
     if use_gpu:
         print("  Using GPU via cuML LogisticRegression")
         model = CuMLLogisticRegression(
+            C=args.regularization,
             max_iter=500,
             tol=1e-3,
             class_weight="balanced",
@@ -135,6 +143,7 @@ def main() -> None:
         
         # First attempt with fast settings
         model = LogisticRegression(
+            C=args.regularization,
             max_iter=500,
             tol=1e-3,
             class_weight="balanced",
@@ -154,6 +163,7 @@ def main() -> None:
         if convergence_failed:
             print("  Warning: Model did not converge. Retrying with max_iter=2000...")
             model = LogisticRegression(
+                C=args.regularization,
                 max_iter=2000,
                 tol=1e-4,
                 class_weight="balanced",
@@ -199,6 +209,7 @@ def main() -> None:
         {
             "metrics": metrics,
             "timing": timing,
+            "regularization_C": args.regularization,
             "train_class_balance": class_balance(y_train),
             "val_class_balance": class_balance(y_val),
             "test_class_balance": class_balance(y_test),
