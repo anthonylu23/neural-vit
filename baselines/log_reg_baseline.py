@@ -118,18 +118,51 @@ def main() -> None:
     print("Training logistic regression...")
     t0 = time.perf_counter()
     use_gpu = gpu_available() and CuMLLogisticRegression is not None and cp is not None
+    print(f"  GPU available: {gpu_available()}, cuML available: {CuMLLogisticRegression is not None}")
+    
     if use_gpu:
         print("  Using GPU via cuML LogisticRegression")
-        model = CuMLLogisticRegression(max_iter=2000, class_weight="balanced")
+        model = CuMLLogisticRegression(
+            max_iter=500,
+            tol=1e-3,
+            class_weight="balanced",
+        )
+        model.fit(X_train_scaled, y_train)
     else:
         print("  Using CPU LogisticRegression")
+        import warnings
+        from sklearn.exceptions import ConvergenceWarning
+        
+        # First attempt with fast settings
         model = LogisticRegression(
-            max_iter=2000,
+            max_iter=500,
+            tol=1e-3,
             class_weight="balanced",
-            solver="saga",
+            solver="lbfgs",
             n_jobs=-1,
         )
-    model.fit(X_train_scaled, y_train)
+        
+        with warnings.catch_warnings(record=True) as caught_warnings:
+            warnings.simplefilter("always", ConvergenceWarning)
+            model.fit(X_train_scaled, y_train)
+            
+            # Check if we hit convergence warning
+            convergence_failed = any(
+                issubclass(w.category, ConvergenceWarning) for w in caught_warnings
+            )
+        
+        if convergence_failed:
+            print("  Warning: Model did not converge. Retrying with max_iter=2000...")
+            model = LogisticRegression(
+                max_iter=2000,
+                tol=1e-4,
+                class_weight="balanced",
+                solver="lbfgs",
+                n_jobs=-1,
+            )
+            model.fit(X_train_scaled, y_train)
+            print("  Retry completed.")
+    
     train_time = time.perf_counter() - t0
     print(f"  Train time: {train_time:.1f}s")
 
