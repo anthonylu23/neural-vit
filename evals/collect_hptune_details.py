@@ -346,13 +346,13 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--metrics-root",
-        default="gs://lfp-temporal-vit/hptune-runs",
+        default="gs://lfp-temporal-vit/hptune-runs-2",
         help="Root path to search for HP tuning metrics jsonl files.",
     )
     parser.add_argument("--project", default=None, help="GCP project id.")
     parser.add_argument("--location", default=None, help="GCP location (e.g., us-central1).")
     parser.add_argument("--experiment", default=None, help="Vertex experiment name.")
-    parser.add_argument("--output", default="evals/hptune_run_details.json", help="Output JSON path.")
+    parser.add_argument("--output", default="evals/hptune_run_2_details.json", help="Output JSON path.")
     return parser.parse_args()
 
 

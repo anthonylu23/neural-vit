@@ -1,0 +1,25 @@
+{
+  "run_id": "temporal-vit-20260108-041936",
+  "params": {
+    "n_heads": 6.0,
+    "train_sequences": 13751.0,
+    "warmup_epochs": 3.0,
+    "batch_size": 16.0,
+    "n_layers": 8.0,
+    "epochs": 20.0,
+    "drop_path": 0.06226401031711636,
+    "stride": 4.0,
+    "n_trials": 8.0,
+    "attention_dropout": 0.08676440513305542,
+    "val_sequences": 2821.0,
+    "lr": 0.0002660071811264128,
+    "model_size": "small",
+    "dropout": 0.38476868338233905,
+    "min_lr": 1e-06,
+    "label_smoothing": 0.13971681747736364,
+    "test_sequences": 2739.0,
+    "weight_decay": 0.02307868385008927,
+    "early_stopping_patience": 5.0,
+    "embed_dim": 384.0
+  }
+}

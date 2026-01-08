@@ -226,6 +226,12 @@ def create_lr_scheduler(
 def train_with_hptune(args: argparse.Namespace):
     """Main training loop with hyperparameter tuning support."""
     
+    # Apply linear scaling rule for learning rate
+    # Base lr is defined at batch_size=16, scale proportionally
+    BASE_BATCH_SIZE = 16
+    lr_scale_factor = args.batch_size / BASE_BATCH_SIZE
+    effective_lr = args.lr * lr_scale_factor
+    
     # Initialize hypertune reporter
     hpt = None
     if hypertune is not None:
@@ -262,7 +268,8 @@ def train_with_hptune(args: argparse.Namespace):
     print("=" * 60)
     print("Hyperparameter Tuning Configuration")
     print("=" * 60)
-    print(f"  lr: {args.lr}")
+    print(f"  lr (base): {args.lr}")
+    print(f"  lr (effective): {effective_lr} (scaled by {lr_scale_factor:.2f}x for batch_size={args.batch_size})")
     print(f"  dropout: {args.dropout}")
     print(f"  attention_dropout: {args.attention_dropout}")
     print(f"  drop_path: {args.drop_path}")
@@ -310,10 +317,10 @@ def train_with_hptune(args: argparse.Namespace):
     model.to(device)
     print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
     
-    # Optimizer and loss
+    # Optimizer and loss (using effective_lr with linear scaling)
     optimizer = torch.optim.AdamW(
         model.parameters(),
-        lr=args.lr,
+        lr=effective_lr,
         weight_decay=args.weight_decay,
     )
     
@@ -366,6 +373,9 @@ def train_with_hptune(args: argparse.Namespace):
     # Log hyperparameters
     logger.log_params({
         "lr": args.lr,
+        "lr_base": args.lr,
+        "lr_effective": effective_lr,
+        "lr_scale_factor": lr_scale_factor,
         "dropout": args.dropout,
         "attention_dropout": args.attention_dropout,
         "drop_path": args.drop_path,
