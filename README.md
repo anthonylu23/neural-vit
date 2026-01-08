@@ -1,17 +1,19 @@
 # Temporal 3D Neural ViT
 
-Temporal 3D Vision Transformer for multi-trial LFP (Local Field Potential) spectrogram sequences, built to classify WT vs FMR1 knockout mice and capture trial-to-trial dynamics.
+End-to-end pipeline for classifying WT vs FMR1 knockout mice from multi-trial LFP (Local Field Potential) spectrogram sequences using a Temporal 3D Vision Transformer. The model treats each sample as a 3D token volume (trial x frequency x time) to capture cross-trial dynamics that single-trial models miss.
 
-## Project Summary
+## Overview
 
-This project models sequences of LFP trials as a 3D token volume (trial x frequency x time) and trains a Temporal 3D ViT to learn cross-trial patterns that single-trial models miss. The data originates in BigQuery, is exported to GCS, preprocessed into normalized spectrogram parquets, and trained on Vertex AI with experiment tracking.
+This project pulls raw LFP traces from BigQuery, exports session-based splits to GCS, and preprocesses each trial into normalized spectrogram parquets. Training runs on Vertex AI with GPU support, checkpointing, and experiment tracking. EDA and evaluation notebooks focus on data quality checks, class balance, and generalization diagnostics across runs and hyperparameter tuning trials.
 
-## Pipeline Overview
+## Pipeline Snapshot
 
-- Raw LFP traces live in BigQuery and are exported to GCS as train/val/test splits.
-- `preprocess_to_gcs.py` computes spectrograms, applies train-set normalization, and writes preprocessed parquets plus normalization stats.
-- `data_loader.py` builds PyTorch datasets/dataloaders directly from preprocessed parquets.
-- Training runs on Vertex AI with GPU support, checkpointing to GCS, and metrics logged to Vertex Experiments + TensorBoard.
+- **Source data**: BigQuery tables of per-trial LFP traces.
+- **Export**: Session-stratified train/val/test splits written to GCS.
+- **Preprocessing**: Spectrogram computation, train-set normalization, and parquet emission.
+- **Training**: Temporal 3D ViT with configurable depth/width and regularization.
+- **Tracking**: Metrics logged to Vertex Experiments + TensorBoard, checkpoints saved to GCS.
+- **Evaluation**: Run aggregation, baselines, and HP tuning comparisons in `evals/`.
 
 ## Repo Highlights
 
@@ -19,4 +21,6 @@ This project models sequences of LFP trials as a 3D token volume (trial x freque
 - `temporal_vit/data/`: preprocessing, dataloaders, and data audit utilities.
 - `temporal_vit/training/`: training loop, config, and experiment logging.
 - `temporal_vit/cloud/`: BigQuery/GCS export helpers.
+- `baselines/`: logistic regression + XGBoost baselines on sequence features.
+- `evals/`: run aggregation, plots, and integrity checks.
 - `notebooks/eda.ipynb`: EDA and data quality checks.
