@@ -11,7 +11,7 @@ from torch.utils.data import DataLoader, Dataset
 
 @dataclass
 class DataLoaderConfig:
-    batch_size: int = 4
+    batch_size: int = 16
     num_workers: int = 0
     pin_memory: Optional[bool] = None
     persistent_workers: bool = False

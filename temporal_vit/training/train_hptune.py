@@ -58,7 +58,7 @@ def parse_args() -> argparse.Namespace:
     # Training configuration
     parser.add_argument("--epochs", type=int, default=20,
                         help="Number of training epochs")
-    parser.add_argument("--batch_size", type=int, default=32,
+    parser.add_argument("--batch_size", type=int, default=16,
                         help="Batch size")
     parser.add_argument("--n_trials", type=int, default=8,
                         help="Number of trials per sequence")
