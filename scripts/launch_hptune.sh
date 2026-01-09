@@ -43,8 +43,8 @@ cd "$(dirname "$0")/.."
 
 # Build and push Docker image if requested
 if [ "$BUILD" = true ]; then
-    echo "Building Docker image..."
-    docker build -t temporal-vit .
+    echo "Building Docker image for linux/amd64 (Vertex AI platform)..."
+    docker build --platform linux/amd64 -t temporal-vit .
     
     echo "Tagging image..."
     docker tag temporal-vit "${IMAGE_URI}"
